@@ -6,6 +6,7 @@ import authRouter from "./modules/auth/auth.routes.js";
 import { authMiddleware } from "./middleware/auth.middleware.js";
 import adminRouter from "./modules/admin/admin.routes.js";
 import documentsRouter from "./modules/documents/documents.routes.js";
+import logsRouter from "./modules/logs/logs.routes.js";
 
 const app = express();
 const PORT = Number(process.env.PORT || 3000);
@@ -44,6 +45,7 @@ app.get("/api/status", (req: Request, res: Response) => {
 app.use("/auth", authRouter);
 app.use("/admin", adminRouter);
 app.use("/documents", documentsRouter);
+app.use("/logs", logsRouter);
 app.use(adminRouter);
 
 app.get("/protected", authMiddleware, (req, res) => {
