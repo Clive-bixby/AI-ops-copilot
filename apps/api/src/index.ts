@@ -4,6 +4,7 @@ import type { Request, Response } from "express";
 import { pool } from "./core/db.js";
 import authRouter from "./modules/auth/auth.routes.js";
 import { authMiddleware } from "./middleware/auth.middleware.js";
+import { errorMiddleware } from "./middleware/error.middleware.js";
 import adminRouter from "./modules/admin/admin.routes.js";
 import documentsRouter from "./modules/documents/documents.routes.js";
 import logsRouter from "./modules/logs/logs.routes.js";
@@ -49,6 +50,7 @@ app.use("/documents", documentsRouter);
 app.use("/logs", logsRouter);
 app.use("/tickets", ticketsRouter);
 app.use(adminRouter);
+app.use(errorMiddleware);
 
 app.get("/protected", authMiddleware, (req, res) => {
   res.json({ message: "You are authenticated" })
