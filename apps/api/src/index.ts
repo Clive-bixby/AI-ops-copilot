@@ -9,6 +9,7 @@ import adminRouter from "./modules/admin/admin.routes.js";
 import documentsRouter from "./modules/documents/documents.routes.js";
 import logsRouter from "./modules/logs/logs.routes.js";
 import ticketsRouter from "./modules/tickets/tickets.routes.js";
+import aiRouter from "./modules/ai/ai.routes.js";
 
 const app = express();
 const PORT = Number(process.env.PORT || 3000);
@@ -49,6 +50,7 @@ app.use("/admin", adminRouter);
 app.use("/documents", documentsRouter);
 app.use("/logs", logsRouter);
 app.use("/tickets", ticketsRouter);
+app.use("/ai", aiRouter);
 app.use(adminRouter);
 app.use(errorMiddleware);
 
