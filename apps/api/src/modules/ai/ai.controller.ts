@@ -1,8 +1,10 @@
 import { asyncHandler } from "../../utils/asyncHandler.js";
 import { createHttpError } from "../../utils/httpError.js";
+import { createDocument } from "../documents/documents.service.js";
 import { checkOllamaHealth, generateEmbedding } from "./embedding.service.js";
 import { chunkText, cleanText, estimateTokens } from "./chunk.service.js";
 import type { ChunkOptions } from "./chunk.service.js";
+import { insertChunks, searchSimilar } from "./vector.service.js";
 
 /**
  * POST /ai/test-embedding
@@ -94,6 +96,128 @@ export const testChunkController = asyncHandler(async (req, res) => {
       preview: chunk.content.length > 120
         ? chunk.content.slice(0, 120) + "..."
         : chunk.content,
+    })),
+  });
+});
+
+/**
+ * POST /ai/test-index
+ *
+ * Temporary protected endpoint for seeding document chunks into pgvector.
+ */
+export const testIndexController = asyncHandler(async (req, res) => {
+  const organizationId = req.organizationId;
+  const { text, filename, maxTokens, overlap, minTokens } = req.body as {
+    text?: string;
+    filename?: string;
+    maxTokens?: number;
+    overlap?: number;
+    minTokens?: number;
+  };
+
+  if (!organizationId) {
+    throw createHttpError(400, "Organization ID is required");
+  }
+
+  if (!text || typeof text !== "string" || text.trim().length === 0) {
+    throw createHttpError(400, "Request body must include a non-empty 'text' field");
+  }
+
+  const options: ChunkOptions = {};
+  if (typeof maxTokens === "number") options.maxTokens = maxTokens;
+  if (typeof overlap === "number") options.overlap = overlap;
+  options.minTokens = typeof minTokens === "number" ? minTokens : 5;
+
+  const chunks = chunkText(text, options);
+  if (chunks.length === 0) {
+    throw createHttpError(400, "Text did not produce any chunks");
+  }
+
+  const document = await createDocument({
+    organizationId,
+    filename:
+      typeof filename === "string" && filename.trim()
+        ? filename.trim()
+        : "day-3-test-document.txt",
+    content: text,
+  });
+
+  const embeddingResults = await Promise.all(
+    chunks.map((chunk) => generateEmbedding(chunk.content))
+  );
+
+  const storedChunks = await insertChunks(
+    chunks.map((chunk) => ({
+      content: chunk.content,
+      index: chunk.index,
+      metadata: {
+        sourceType: "document",
+        sourceId: document.id,
+        chunkHash: chunk.hash,
+        tokenCount: chunk.tokenCount,
+        charCount: chunk.charCount,
+      },
+    })),
+    embeddingResults.map((result) => result.embedding),
+    document.id,
+    organizationId
+  );
+
+  return res.status(201).json({
+    success: true,
+    document,
+    model: embeddingResults[0]?.model,
+    dimensions: embeddingResults[0]?.dimensions,
+    totalChunks: storedChunks.length,
+    chunks: storedChunks.map((chunk) => ({
+      id: chunk.id,
+      chunkIndex: chunk.chunkIndex,
+      preview:
+        chunk.content.length > 120
+          ? chunk.content.slice(0, 120) + "..."
+          : chunk.content,
+    })),
+  });
+});
+
+/**
+ * POST /ai/test-search
+ *
+ * Temporary protected endpoint for verifying query embedding + pgvector search.
+ */
+export const testSearchController = asyncHandler(async (req, res) => {
+  const organizationId = req.organizationId;
+  const { query, limit } = req.body as { query?: string; limit?: number };
+
+  if (!organizationId) {
+    throw createHttpError(400, "Organization ID is required");
+  }
+
+  if (!query || typeof query !== "string" || query.trim().length === 0) {
+    throw createHttpError(400, "Request body must include a non-empty 'query' field");
+  }
+
+  if (limit !== undefined && (!Number.isInteger(limit) || limit < 1)) {
+    throw createHttpError(400, "'limit' must be a positive integer");
+  }
+
+  const embeddingResult = await generateEmbedding(query);
+  const results = await searchSimilar(
+    embeddingResult.embedding,
+    organizationId,
+    limit
+  );
+
+  return res.status(200).json({
+    results: results.map((result) => ({
+      id: result.id,
+      documentId: result.documentId,
+      chunkIndex: result.chunkIndex,
+      content: result.content,
+      metadata: result.metadata,
+      distance: result.distance,
+      score: result.score,
+      createdAt: result.createdAt,
     })),
   });
 });

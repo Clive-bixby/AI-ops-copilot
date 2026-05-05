@@ -1,6 +1,9 @@
 -- Enable UUID generation
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 
+-- Enable pgvector for embedding storage and similarity search
+CREATE EXTENSION IF NOT EXISTS vector;
+
 -- -----------------------------
 -- Organizations
 -- -----------------------------
@@ -68,5 +71,40 @@ CREATE TABLE documents (
     organization_id UUID REFERENCES organizations(id) ON DELETE CASCADE,
     filename TEXT,
     content TEXT,
+    processing_status TEXT NOT NULL DEFAULT 'pending',
+    processing_error TEXT,
+    processed_at TIMESTAMP,
     created_at TIMESTAMP DEFAULT NOW()
 );
+
+ALTER TABLE documents
+ADD COLUMN IF NOT EXISTS processing_status TEXT NOT NULL DEFAULT 'pending',
+ADD COLUMN IF NOT EXISTS processing_error TEXT,
+ADD COLUMN IF NOT EXISTS processed_at TIMESTAMP;
+
+CREATE INDEX IF NOT EXISTS idx_documents_org_processing_status
+ON documents (organization_id, processing_status);
+
+-- -----------------------------
+-- Document Chunks (pgvector)
+-- -----------------------------
+-- Embedding dimension must match the configured embedding model.
+-- Current default model: nomic-embed-text => 768 dimensions.
+CREATE TABLE IF NOT EXISTS document_chunks (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    document_id UUID NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+    organization_id UUID NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+    chunk_index INTEGER NOT NULL,
+    content TEXT NOT NULL,
+    embedding VECTOR(768) NOT NULL,
+    metadata JSONB,
+    created_at TIMESTAMP DEFAULT NOW(),
+    UNIQUE(document_id, chunk_index)
+);
+
+CREATE INDEX IF NOT EXISTS idx_document_chunks_org_document
+ON document_chunks (organization_id, document_id);
+
+CREATE INDEX IF NOT EXISTS idx_document_chunks_embedding_hnsw_cosine
+ON document_chunks
+USING hnsw (embedding vector_cosine_ops);

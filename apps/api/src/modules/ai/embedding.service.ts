@@ -21,6 +21,11 @@ type OllamaEmbeddingResponse = {
   embedding: number[];
 };
 
+type OllamaBatchEmbeddingResponse = {
+  model?: string;
+  embeddings: number[][];
+};
+
 type OllamaHealthResponse = {
   status?: string;
 };
@@ -111,6 +116,97 @@ export async function generateEmbedding(text: string): Promise<EmbeddingResult> 
 
       throw new EmbeddingConnectionError(
         `Ollama request failed (${error.response?.status ?? "unknown"}): ${error.message}`
+      );
+    }
+
+    throw error;
+  }
+}
+
+/**
+ * Generate embeddings for multiple texts in one Ollama request.
+ *
+ * Uses `POST /api/embed`, which accepts an array of inputs. This avoids one
+ * HTTP round trip per chunk and lets Ollama schedule the batch together.
+ */
+export async function generateEmbeddings(
+  texts: string[]
+): Promise<EmbeddingResult[]> {
+  if (!Array.isArray(texts) || texts.length === 0) {
+    throw new EmbeddingValidationError(
+      "Texts must be a non-empty string array"
+    );
+  }
+
+  const trimmedTexts = texts.map((text, index) => {
+    if (!text || text.trim().length === 0) {
+      throw new EmbeddingValidationError(
+        `Text at index ${index} must be a non-empty string`
+      );
+    }
+
+    return text.trim();
+  });
+
+  try {
+    const response = await axios.post<OllamaBatchEmbeddingResponse>(
+      `${OLLAMA_URL}/api/embed`,
+      {
+        model: EMBEDDING_MODEL,
+        input: trimmedTexts,
+      },
+      {
+        timeout: 120_000,
+        headers: { "Content-Type": "application/json" },
+      }
+    );
+
+    const { embeddings } = response.data;
+
+    if (!Array.isArray(embeddings) || embeddings.length === 0) {
+      throw new EmbeddingModelError(
+        "Ollama returned an invalid or empty embeddings array"
+      );
+    }
+
+    if (embeddings.length !== trimmedTexts.length) {
+      throw new EmbeddingModelError(
+        `Ollama returned ${embeddings.length} embeddings for ${trimmedTexts.length} inputs`
+      );
+    }
+
+    return embeddings.map((embedding, index) => {
+      if (!Array.isArray(embedding) || embedding.length === 0) {
+        throw new EmbeddingModelError(
+          `Ollama returned an invalid embedding at index ${index}`
+        );
+      }
+
+      return {
+        embedding,
+        dimensions: embedding.length,
+        model: response.data.model || EMBEDDING_MODEL,
+      };
+    });
+  } catch (error) {
+    if (error instanceof EmbeddingValidationError) throw error;
+    if (error instanceof EmbeddingModelError) throw error;
+
+    if (error instanceof AxiosError) {
+      if (error.code === "ECONNREFUSED" || error.code === "ENOTFOUND") {
+        throw new EmbeddingConnectionError(
+          `Cannot connect to Ollama at ${OLLAMA_URL}. Is Ollama running?`
+        );
+      }
+
+      if (error.response?.status === 404) {
+        throw new EmbeddingModelError(
+          `Model '${EMBEDDING_MODEL}' not found. Run: ollama pull ${EMBEDDING_MODEL}`
+        );
+      }
+
+      throw new EmbeddingConnectionError(
+        `Ollama batch request failed (${error.response?.status ?? "unknown"}): ${error.message}`
       );
     }
 

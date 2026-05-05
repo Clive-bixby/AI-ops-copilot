@@ -14,6 +14,9 @@ const ERROR_STATUS_BY_NAME: Record<string, number> = {
   EmbeddingValidationError: 400,
   EmbeddingConnectionError: 502,
   EmbeddingModelError: 503,
+  DocumentParserError: 400,
+  DocumentProcessingError: 500,
+  VectorValidationError: 400,
 };
 
 function resolveStatus(error: HttpError): number {

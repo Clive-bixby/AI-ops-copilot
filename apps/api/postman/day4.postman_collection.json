@@ -1,0 +1,506 @@
+{
+  "info": {
+    "_postman_id": "b255b985-a7b8-4e74-a1f3-bf57f4b2e030",
+    "name": "AI Ops Copilot - Day 4 Pipeline Tests",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+    "description": "Manual-friendly Postman collection for Day 4 document ingestion pipeline testing."
+  },
+  "item": [
+    {
+      "name": "01 - AI Health",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/ai/health",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "ai",
+            "health"
+          ]
+        }
+      },
+      "response": [],
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('Status is 200 or 503', function () {",
+              "  pm.expect([200, 503]).to.include(pm.response.code);",
+              "});",
+              "",
+              "const body = pm.response.json();",
+              "console.log('AI health response:', body);"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "02 - Register",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"email\": \"{{email}}\",\n  \"password\": \"{{password}}\",\n  \"organizationName\": \"{{organizationName}}\"\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "url": {
+          "raw": "{{baseUrl}}/auth/register",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "auth",
+            "register"
+          ]
+        }
+      },
+      "response": [],
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('Status is 201', function () {",
+              "  pm.response.to.have.status(201);",
+              "});",
+              "",
+              "const body = pm.response.json();",
+              "pm.test('Token exists in response', function () {",
+              "  pm.expect(body.token).to.be.a('string').and.not.empty;",
+              "});",
+              "",
+              "pm.environment.set('token', body.token);",
+              "",
+              "function decodeJwtPayload(token) {",
+              "  const parts = token.split('.');",
+              "  if (parts.length !== 3) return null;",
+              "  const base64Url = parts[1];",
+              "  const base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');",
+              "  const padded = base64 + '='.repeat((4 - (base64.length % 4)) % 4);",
+              "  try {",
+              "    return JSON.parse(atob(padded));",
+              "  } catch (error) {",
+              "    console.log('JWT decode error:', error);",
+              "    return null;",
+              "  }",
+              "}",
+              "",
+              "const payload = decodeJwtPayload(body.token);",
+              "if (payload && payload.organizationId) {",
+              "  pm.environment.set('organizationId', payload.organizationId);",
+              "}",
+              "",
+              "pm.test('organizationId extracted from JWT', function () {",
+              "  const orgId = pm.environment.get('organizationId');",
+              "  pm.expect(orgId).to.be.a('string').and.not.empty;",
+              "});"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "03 - Login (Optional)",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"email\": \"{{email}}\",\n  \"password\": \"{{password}}\"\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "url": {
+          "raw": "{{baseUrl}}/auth/login",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "auth",
+            "login"
+          ]
+        }
+      },
+      "response": [],
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('Status is 200', function () {",
+              "  pm.response.to.have.status(200);",
+              "});",
+              "",
+              "const body = pm.response.json();",
+              "pm.test('Login returns token', function () {",
+              "  pm.expect(body.token).to.be.a('string').and.not.empty;",
+              "});",
+              "",
+              "pm.environment.set('token', body.token);",
+              "console.log('Note: keep organizationId from Register token.');"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "04 - Upload Document (.txt or .pdf)",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          },
+          {
+            "key": "x-organization-id",
+            "value": "{{organizationId}}"
+          }
+        ],
+        "body": {
+          "mode": "formdata",
+          "formdata": [
+            {
+              "key": "file",
+              "type": "file",
+              "src": ""
+            }
+          ]
+        },
+        "url": {
+          "raw": "{{baseUrl}}/documents/upload",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "documents",
+            "upload"
+          ]
+        },
+        "description": "In Postman Body tab, select a local .txt or .pdf file for key `file`."
+      },
+      "response": [],
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('Status is 201', function () {",
+              "  pm.response.to.have.status(201);",
+              "});",
+              "",
+              "const body = pm.response.json();",
+              "pm.test('Response has id, filename, processing', function () {",
+              "  pm.expect(body.id).to.be.a('string').and.not.empty;",
+              "  pm.expect(body.filename).to.be.a('string').and.not.empty;",
+              "  pm.expect(body.processing).to.be.an('object');",
+              "  pm.expect(body.processing.status).to.be.a('string');",
+              "});",
+              "",
+              "pm.environment.set('documentId', body.id);",
+              "",
+              "pm.test('processing.status is processed or failed', function () {",
+              "  pm.expect(['processed', 'failed']).to.include(body.processing.status);",
+              "});",
+              "",
+              "if (body.processing.status === 'failed') {",
+              "  console.warn('Document processing failed:', body.processing.error);",
+              "}"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "05 - List Documents",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          },
+          {
+            "key": "x-organization-id",
+            "value": "{{organizationId}}"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/documents",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "documents"
+          ]
+        }
+      },
+      "response": [],
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('Status is 200', function () {",
+              "  pm.response.to.have.status(200);",
+              "});",
+              "",
+              "const docs = pm.response.json();",
+              "pm.test('Response is an array', function () {",
+              "  pm.expect(docs).to.be.an('array');",
+              "});",
+              "",
+              "const documentId = pm.environment.get('documentId');",
+              "if (documentId) {",
+              "  const found = docs.find((doc) => doc.id === documentId);",
+              "  pm.test('Uploaded document is listed', function () {",
+              "    pm.expect(found, 'Document not found in list').to.exist;",
+              "  });",
+              "",
+              "  if (found) {",
+              "    pm.test('Document has processingStatus field', function () {",
+              "      pm.expect(found).to.have.property('processingStatus');",
+              "    });",
+              "  }",
+              "}"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "06 - Vector Search",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          },
+          {
+            "key": "x-organization-id",
+            "value": "{{organizationId}}"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"query\": \"database latency troubleshooting\",\n  \"limit\": 5\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "url": {
+          "raw": "{{baseUrl}}/ai/test-search",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "ai",
+            "test-search"
+          ]
+        }
+      },
+      "response": [],
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('Status is 200', function () {",
+              "  pm.response.to.have.status(200);",
+              "});",
+              "",
+              "const body = pm.response.json();",
+              "pm.test('results is an array', function () {",
+              "  pm.expect(body.results).to.be.an('array');",
+              "});",
+              "",
+              "if (body.results.length === 0) {",
+              "  console.warn('No results found. Ensure a processed document exists for this organization.');",
+              "}"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "07 - Upload Unsupported File (.csv)",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          },
+          {
+            "key": "x-organization-id",
+            "value": "{{organizationId}}"
+          }
+        ],
+        "body": {
+          "mode": "formdata",
+          "formdata": [
+            {
+              "key": "file",
+              "type": "file",
+              "src": ""
+            }
+          ]
+        },
+        "url": {
+          "raw": "{{baseUrl}}/documents/upload",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "documents",
+            "upload"
+          ]
+        },
+        "description": "Select a .csv file for key `file`."
+      },
+      "response": [],
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('Status is 201 (metadata persists)', function () {",
+              "  pm.response.to.have.status(201);",
+              "});",
+              "",
+              "const body = pm.response.json();",
+              "pm.test('processing.status is failed', function () {",
+              "  pm.expect(body.processing).to.be.an('object');",
+              "  pm.expect(body.processing.status).to.eql('failed');",
+              "});",
+              "",
+              "pm.test('processing.error is present', function () {",
+              "  pm.expect(body.processing.error).to.be.a('string').and.not.empty;",
+              "});"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "08 - Tenant Check (Missing Org Header)",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/documents",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "documents"
+          ]
+        }
+      },
+      "response": [],
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('Status is 400', function () {",
+              "  pm.response.to.have.status(400);",
+              "});"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "09 - Tenant Check (Wrong Org Header)",
+      "event": [
+        {
+          "listen": "prerequest",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.environment.set('wrongOrganizationId', pm.variables.replaceIn('{{$guid}}'));"
+            ]
+          }
+        },
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('Status is 403', function () {",
+              "  pm.response.to.have.status(403);",
+              "});"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          },
+          {
+            "key": "x-organization-id",
+            "value": "{{wrongOrganizationId}}"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/documents",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "documents"
+          ]
+        }
+      },
+      "response": []
+    }
+  ]
+}

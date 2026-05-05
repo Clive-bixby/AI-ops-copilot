@@ -1,5 +1,6 @@
 import { asyncHandler } from "../../utils/asyncHandler.js";
 import { createHttpError } from "../../utils/httpError.js";
+import { processDocument } from "../ai/documentProcessing.service.js";
 import { createDocument, listDocuments } from "./documents.service.js";
 
 export const createDocumentController = asyncHandler(async (req, res) => {
@@ -14,12 +15,27 @@ export const createDocumentController = asyncHandler(async (req, res) => {
     throw createHttpError(400, "File is required");
   }
 
-  const result = await createDocument({
+  console.log("Document received", {
     organizationId,
-    filename: file.filename,
+    filename: file.originalname,
+    storedAs: file.filename,
   });
 
-  return res.status(201).json(result);
+  const document = await createDocument({
+    organizationId,
+    filename: file.originalname || file.filename,
+  });
+
+  const processing = await processDocument(
+    document.id,
+    file.path,
+    organizationId
+  );
+
+  return res.status(201).json({
+    ...document,
+    processing,
+  });
 });
 
 export const listDocumentsController = asyncHandler(async (req, res) => {
