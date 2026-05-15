@@ -5,6 +5,11 @@ import { checkOllamaHealth, generateEmbedding } from "./embedding.service.js";
 import { chunkText, cleanText, estimateTokens } from "./chunk.service.js";
 import type { ChunkOptions } from "./chunk.service.js";
 import { insertChunks, searchSimilar } from "./vector.service.js";
+import {
+  searchRelevantChunks,
+  validateRetrievalLimit,
+  validateSearchQuery,
+} from "./retrieval.service.js";
 
 /**
  * POST /ai/test-embedding
@@ -39,6 +44,38 @@ export const aiHealthController = asyncHandler(async (_req, res) => {
   const status = health.healthy ? 200 : 503;
 
   return res.status(status).json(health);
+});
+
+/**
+ * POST /ai/search
+ *
+ * Production semantic search endpoint. Generates an embedding for a natural
+ * language query and returns tenant-scoped, threshold-filtered document chunks.
+ */
+export const searchController = asyncHandler(async (req, res) => {
+  const startedAt = Date.now();
+  const organizationId = req.organizationId;
+  const { query, limit } = req.body as { query?: unknown; limit?: unknown };
+
+  if (!organizationId) {
+    throw createHttpError(400, "Organization ID is required");
+  }
+
+  const trimmedQuery = validateSearchQuery(query);
+  const searchLimit = validateRetrievalLimit(limit);
+
+  const results = await searchRelevantChunks(
+    trimmedQuery,
+    organizationId,
+    searchLimit
+  );
+
+  return res.status(200).json({
+    query: trimmedQuery,
+    totalResults: results.length,
+    executionTimeMs: Date.now() - startedAt,
+    results,
+  });
 });
 
 /**
@@ -216,7 +253,7 @@ export const testSearchController = asyncHandler(async (req, res) => {
       content: result.content,
       metadata: result.metadata,
       distance: result.distance,
-      score: result.score,
+      similarity: result.similarity,
       createdAt: result.createdAt,
     })),
   });

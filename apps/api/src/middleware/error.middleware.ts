@@ -17,6 +17,7 @@ const ERROR_STATUS_BY_NAME: Record<string, number> = {
   DocumentParserError: 400,
   DocumentProcessingError: 500,
   VectorValidationError: 400,
+  RetrievalValidationError: 400,
 };
 
 function resolveStatus(error: HttpError): number {

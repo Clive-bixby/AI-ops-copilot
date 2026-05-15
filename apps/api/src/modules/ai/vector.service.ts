@@ -5,7 +5,7 @@ import { pool } from "../../core/db.js";
 
 const EXPECTED_EMBEDDING_DIMENSIONS = 768;
 const DEFAULT_SEARCH_LIMIT = 5;
-const MAX_SEARCH_LIMIT = 25;
+const MAX_SEARCH_LIMIT = 10;
 
 export type VectorChunkInput = {
   content: string;
@@ -30,7 +30,7 @@ type SimilarityRow = {
   content: string;
   metadata: Record<string, unknown> | null;
   distance: string | number;
-  score: string | number;
+  similarity: string | number;
   created_at: string;
 };
 
@@ -51,7 +51,7 @@ export type SimilarityResult = {
   content: string;
   metadata: Record<string, unknown> | null;
   distance: number;
-  score: number;
+  similarity: number;
   createdAt: string;
 };
 
@@ -97,7 +97,32 @@ function normalizeLimit(limit?: number): number {
     throw new VectorValidationError("Search limit must be a positive integer");
   }
 
-  return Math.min(limit, MAX_SEARCH_LIMIT);
+  if (limit > MAX_SEARCH_LIMIT) {
+    throw new VectorValidationError(
+      `Search limit must be less than or equal to ${MAX_SEARCH_LIMIT}`
+    );
+  }
+
+  return limit;
+}
+
+function normalizeSimilarityThreshold(minSimilarity?: number): number {
+  if (minSimilarity === undefined) {
+    return 0;
+  }
+
+  if (
+    typeof minSimilarity !== "number" ||
+    !Number.isFinite(minSimilarity) ||
+    minSimilarity < 0 ||
+    minSimilarity > 1
+  ) {
+    throw new VectorValidationError(
+      "Minimum similarity must be a number between 0 and 1"
+    );
+  }
+
+  return minSimilarity;
 }
 
 function rowToStoredChunk(row: DocumentChunkRow): StoredDocumentChunk {
@@ -120,7 +145,7 @@ function rowToSimilarityResult(row: SimilarityRow): SimilarityResult {
     content: row.content,
     metadata: row.metadata,
     distance: Number(row.distance),
-    score: Number(row.score),
+    similarity: Number(row.similarity),
     createdAt: row.created_at,
   };
 }
@@ -249,10 +274,13 @@ export async function insertChunks(
 export async function searchSimilar(
   queryEmbedding: number[],
   organizationId: string,
-  limit?: number
+  limit?: number,
+  minSimilarity?: number
 ): Promise<SimilarityResult[]> {
   const orgId = validateId(organizationId, "Organization ID");
   const searchLimit = normalizeLimit(limit);
+  const similarityThreshold = normalizeSimilarityThreshold(minSimilarity);
+  const maxDistance = 1 - similarityThreshold;
   validateEmbedding(queryEmbedding, "Query embedding");
 
   const result = await pool.query<SimilarityRow>(
@@ -264,14 +292,15 @@ export async function searchSimilar(
       content,
       metadata,
       embedding <=> $2::vector AS distance,
-      1 - (embedding <=> $2::vector) AS score,
+      1 - (embedding <=> $2::vector) AS similarity,
       created_at
     FROM document_chunks
     WHERE organization_id = $1
+      AND (embedding <=> $2::vector) <= $4
     ORDER BY embedding <=> $2::vector
     LIMIT $3
     `,
-    [orgId, toSql(queryEmbedding), searchLimit]
+    [orgId, toSql(queryEmbedding), searchLimit, maxDistance]
   );
 
   return result.rows.map(rowToSimilarityResult);

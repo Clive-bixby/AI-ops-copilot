@@ -4,6 +4,7 @@ import { authMiddleware } from "../../middleware/auth.middleware.js";
 import { orgMiddleware } from "../../middleware/org.middleware.js";
 import {
   aiHealthController,
+  searchController,
   testEmbeddingController,
   testChunkController,
   testIndexController,
@@ -20,6 +21,9 @@ aiRouter.post("/test-embedding", testEmbeddingController);
 
 // Test endpoint — Day 2 chunking verification; lock down in production
 aiRouter.post("/test-chunk", testChunkController);
+
+// Production semantic search, scoped to the active organization
+aiRouter.post("/search", authMiddleware, orgMiddleware, searchController);
 
 // Test endpoint for Day 3 vector indexing, scoped to the active org
 aiRouter.post("/test-index", authMiddleware, orgMiddleware, testIndexController);
