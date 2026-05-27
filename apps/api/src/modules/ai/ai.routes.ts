@@ -3,6 +3,7 @@ import { Router } from "express";
 import { authMiddleware } from "../../middleware/auth.middleware.js";
 import { orgMiddleware } from "../../middleware/org.middleware.js";
 import {
+  askQuestion,
   aiHealthController,
   searchController,
   testEmbeddingController,
@@ -24,6 +25,9 @@ aiRouter.post("/test-chunk", testChunkController);
 
 // Production semantic search, scoped to the active organization
 aiRouter.post("/search", authMiddleware, orgMiddleware, searchController);
+
+// Production RAG question answering, scoped to the active organization
+aiRouter.post("/ask", authMiddleware, orgMiddleware, askQuestion);
 
 // Test endpoint for Day 3 vector indexing, scoped to the active org
 aiRouter.post("/test-index", authMiddleware, orgMiddleware, testIndexController);

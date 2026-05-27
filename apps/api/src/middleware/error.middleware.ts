@@ -18,6 +18,8 @@ const ERROR_STATUS_BY_NAME: Record<string, number> = {
   DocumentProcessingError: 500,
   VectorValidationError: 400,
   RetrievalValidationError: 400,
+  RAGValidationError: 400,
+  RAGProviderError: 502,
 };
 
 function resolveStatus(error: HttpError): number {

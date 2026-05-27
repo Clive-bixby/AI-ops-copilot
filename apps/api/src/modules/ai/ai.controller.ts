@@ -10,6 +10,7 @@ import {
   validateRetrievalLimit,
   validateSearchQuery,
 } from "./retrieval.service.js";
+import { answerQuestion, validateRAGQuestion } from "./rag.service.js";
 
 /**
  * POST /ai/test-embedding
@@ -75,6 +76,41 @@ export const searchController = asyncHandler(async (req, res) => {
     totalResults: results.length,
     executionTimeMs: Date.now() - startedAt,
     results,
+  });
+});
+
+/**
+ * POST /ai/ask
+ *
+ * Tenant-scoped RAG question answering endpoint. Retrieves relevant chunks,
+ * builds a grounded prompt, calls the configured LLM, and returns citations.
+ */
+export const askQuestion = asyncHandler(async (req, res) => {
+  const startedAt = Date.now();
+  const organizationId = req.organizationId;
+  const { question } = req.body as { question?: unknown };
+
+  if (!organizationId) {
+    throw createHttpError(400, "Organization ID is required");
+  }
+
+  const trimmedQuestion = validateRAGQuestion(question);
+
+  console.log("Ask question request received", {
+    organizationId,
+    questionLength: trimmedQuestion.length,
+  });
+
+  const result = await answerQuestion(trimmedQuestion, organizationId);
+
+  console.log("Ask question request completed", {
+    organizationId,
+    executionTimeMs: Date.now() - startedAt,
+  });
+
+  return res.status(200).json({
+    question: trimmedQuestion,
+    ...result,
   });
 });
 
