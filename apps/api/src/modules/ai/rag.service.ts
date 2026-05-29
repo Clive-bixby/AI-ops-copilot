@@ -1,37 +1,50 @@
 import axios, { AxiosError } from "axios";
 
 import { estimateTokens } from "./chunk.service.js";
-import { searchRelevantChunks } from "./retrieval.service.js";
+import {
+  DEFAULT_MIN_SIMILARITY,
+  retrieveRelevantChunks,
+} from "./retrieval.service.js";
+import type { CitationSource, RetrievalMetrics } from "./retrieval.service.js";
+import { elapsedMs, logAIMetrics, nowMs } from "./aiMetrics.util.js";
 
 const DEFAULT_RAG_TOP_K = 5;
 const MAX_RAG_TOP_K = 10;
 const DEFAULT_MAX_CONTEXT_TOKENS = 2200;
 const DEFAULT_MAX_OUTPUT_TOKENS = 700;
-const DEFAULT_MIN_SIMILARITY = 0.7;
-const MIN_QUESTION_LENGTH = 3;
+const MIN_QUESTION_LENGTH = 5;
 const MAX_QUESTION_LENGTH = 500;
+const NO_RELIABLE_CONTEXT_ANSWER = "No reliable operational context found.";
 const DEFAULT_GEMINI_MODEL = "gemini-2.5-flash-lite";
 const GEMINI_API_BASE_URL =
   process.env.GEMINI_API_BASE_URL || "https://generativelanguage.googleapis.com";
+
+export type QueryType =
+  | "incident_analysis"
+  | "documentation_lookup"
+  | "root_cause"
+  | "general_operational";
+
+export type ConfidenceLevel = "high" | "medium" | "low";
 
 export type RAGSource = {
   documentId: string;
   chunkIndex: number;
   similarity: number;
+  preview: string;
 };
 
-export type RAGAnswerMetadata = {
-  model: string;
-  retrievedChunks: number;
-  usedChunks: number;
-  llmResponseTimeMs: number;
-  executionTimeMs: number;
+export type RAGMetrics = RetrievalMetrics & {
+  generationMs: number;
+  totalMs: number;
 };
 
 export type RAGAnswerResponse = {
   answer: string;
+  confidence: ConfidenceLevel;
   sources: RAGSource[];
-  metadata: RAGAnswerMetadata;
+  sourceCount: number;
+  metrics: RAGMetrics;
 };
 
 export type RAGRequest = {
@@ -41,14 +54,7 @@ export type RAGRequest = {
 
 export type RAGResponse = RAGAnswerResponse;
 
-type RetrievedChunk = {
-  content: string;
-  similarity: number;
-  documentId: string;
-  chunkIndex: number;
-};
-
-type PromptContextChunk = RetrievedChunk & {
+type PromptContextChunk = CitationSource & {
   sourceNumber: number;
   promptContent: string;
 };
@@ -83,6 +89,13 @@ export class RAGProviderError extends Error {
   constructor(message: string) {
     super(message);
     this.name = "RAGProviderError";
+  }
+}
+
+export class RAGProviderTimeoutError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "RAGProviderTimeoutError";
   }
 }
 
@@ -126,11 +139,12 @@ function getSimilarityEnv(name: string): number | undefined {
 }
 
 function getRAGMinSimilarity(): number {
-  return (
+  const configured =
     getSimilarityEnv("RAG_MIN_SIMILARITY") ??
     getSimilarityEnv("AI_SEARCH_MIN_SIMILARITY") ??
-    DEFAULT_MIN_SIMILARITY
-  );
+    DEFAULT_MIN_SIMILARITY;
+
+  return Math.max(configured, DEFAULT_MIN_SIMILARITY);
 }
 
 function getGeminiModel(): string {
@@ -146,25 +160,32 @@ function getGeminiApiKey(): string {
   return apiKey.trim();
 }
 
+function sanitizeQuestion(question: string): string {
+  return question
+    .replace(/[\u0000-\u001F\u007F]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 export function validateRAGQuestion(question: unknown): string {
   if (typeof question !== "string") {
     throw new RAGValidationError("Question must be a string");
   }
 
-  const trimmed = question.trim();
-  if (trimmed.length < MIN_QUESTION_LENGTH) {
+  const sanitized = sanitizeQuestion(question);
+  if (sanitized.length < MIN_QUESTION_LENGTH) {
     throw new RAGValidationError(
       `Question must be at least ${MIN_QUESTION_LENGTH} characters long`
     );
   }
 
-  if (trimmed.length > MAX_QUESTION_LENGTH) {
+  if (sanitized.length > MAX_QUESTION_LENGTH) {
     throw new RAGValidationError(
       `Question must be no more than ${MAX_QUESTION_LENGTH} characters long`
     );
   }
 
-  return trimmed;
+  return sanitized;
 }
 
 function validateOrganizationId(organizationId: unknown): string {
@@ -175,11 +196,60 @@ function validateOrganizationId(organizationId: unknown): string {
   return organizationId.trim();
 }
 
-function toSource(chunk: RetrievedChunk): RAGSource {
+export function classifyQuery(question: string): QueryType {
+  const normalized = question.toLowerCase();
+
+  if (
+    /\b(root cause|rca|why did|caused by|underlying cause|postmortem)\b/.test(
+      normalized
+    )
+  ) {
+    return "root_cause";
+  }
+
+  if (
+    /\b(incident|outage|degraded|spike|failure|failed|errors?|timeouts?|latency|unable to|down)\b/.test(
+      normalized
+    )
+  ) {
+    return "incident_analysis";
+  }
+
+  if (
+    /\b(documentation|docs|runbook|how do i|how to|steps|procedure|setup|configure)\b/.test(
+      normalized
+    )
+  ) {
+    return "documentation_lookup";
+  }
+
+  return "general_operational";
+}
+
+function getTopKForQueryType(queryType: QueryType): number {
+  const baseTopK = getRAGTopK();
+
+  if (queryType === "root_cause") {
+    return Math.min(Math.max(baseTopK, 7), MAX_RAG_TOP_K);
+  }
+
+  if (queryType === "incident_analysis") {
+    return Math.min(Math.max(baseTopK, 6), MAX_RAG_TOP_K);
+  }
+
+  if (queryType === "documentation_lookup") {
+    return Math.min(Math.max(baseTopK, 4), MAX_RAG_TOP_K);
+  }
+
+  return baseTopK;
+}
+
+function toSource(chunk: CitationSource): RAGSource {
   return {
     documentId: chunk.documentId,
     chunkIndex: chunk.chunkIndex,
-    similarity: chunk.similarity,
+    similarity: Number(chunk.similarity.toFixed(4)),
+    preview: chunk.preview,
   };
 }
 
@@ -205,7 +275,7 @@ function formatContextBlock(chunk: PromptContextChunk): string {
   ].join("\n");
 }
 
-function buildContextChunks(chunks: RetrievedChunk[]): PromptContextChunk[] {
+function buildContextChunks(chunks: CitationSource[]): PromptContextChunk[] {
   const maxContextTokens = Math.floor(
     getNumberEnv("RAG_MAX_CONTEXT_TOKENS", DEFAULT_MAX_CONTEXT_TOKENS)
   );
@@ -213,11 +283,15 @@ function buildContextChunks(chunks: RetrievedChunk[]): PromptContextChunk[] {
   let usedTokens = 0;
 
   for (const chunk of chunks) {
+    if (!chunk.content || chunk.content.trim().length === 0) {
+      continue;
+    }
+
     const sourceNumber = contextChunks.length + 1;
     const fullCandidate: PromptContextChunk = {
       ...chunk,
       sourceNumber,
-      promptContent: chunk.content,
+      promptContent: chunk.content.trim(),
     };
     const fullBlock = formatContextBlock(fullCandidate);
     const fullBlockTokens = estimateTokens(fullBlock);
@@ -250,25 +324,77 @@ function buildContextChunks(chunks: RetrievedChunk[]): PromptContextChunk[] {
   return contextChunks;
 }
 
-function buildGroundedPrompt(question: string, contextChunks: PromptContextChunk[]): string {
-  const context = contextChunks.map(formatContextBlock).join("\n\n");
-
+function buildGroundedPrompt(input: {
+  question: string;
+  queryType: QueryType;
+  context: PromptContextChunk[];
+}): string {
   return [
-    "You are an AI Ops assistant for SaaS operations teams.",
+    "Role: You are an operational AI assistant for SaaS engineering teams.",
     "",
-    "Answer ONLY using the provided context.",
-    "Do not use outside knowledge.",
-    'If the answer cannot be found in the context, say exactly: "Insufficient information available."',
+    "Grounding rules:",
+    "- Use only the provided context.",
+    "- Do not invent incidents, services, timestamps, metrics, causes, users, or actions.",
+    `- If the context is insufficient, answer exactly: ${NO_RELIABLE_CONTEXT_ANSWER}`,
+    "- Prefer concise operational summaries over speculation.",
+    "- Separate confirmed evidence from uncertainty.",
     "",
-    "Keep the answer concise, operational, and factual.",
-    "Do not invent causes, timestamps, services, users, incidents, or metrics.",
+    "Answer style:",
+    "- Be direct, factual, and operational.",
+    "- Summarize retrieved evidence clearly.",
+    "- Recommend next checks only when the context supports them.",
+    "",
+    `Query type: ${input.queryType}`,
     "",
     "Context:",
-    context,
+    input.context.map(formatContextBlock).join("\n\n"),
     "",
     "Question:",
-    question,
+    input.question,
+    "",
+    "Citation instructions:",
+    "- Reference source numbers inline when making evidence-backed claims.",
+    "- Do not cite sources that were not provided.",
   ].join("\n");
+}
+
+function estimateConfidence(chunks: CitationSource[]): ConfidenceLevel {
+  if (chunks.length === 0) {
+    return "low";
+  }
+
+  const similarities = chunks.map((chunk) => chunk.similarity);
+  const bestSimilarity = Math.max(...similarities);
+  const averageSimilarity =
+    similarities.reduce((sum, similarity) => sum + similarity, 0) /
+    similarities.length;
+
+  if (bestSimilarity >= 0.88 && averageSimilarity >= 0.8 && chunks.length >= 2) {
+    return "high";
+  }
+
+  if (bestSimilarity >= 0.78 && averageSimilarity >= 0.75) {
+    return "medium";
+  }
+
+  return "low";
+}
+
+function buildNoContextResponse(input: {
+  metrics: RetrievalMetrics;
+  totalMs: number;
+}): RAGAnswerResponse {
+  return {
+    answer: NO_RELIABLE_CONTEXT_ANSWER,
+    confidence: "low",
+    sources: [],
+    sourceCount: 0,
+    metrics: {
+      ...input.metrics,
+      generationMs: 0,
+      totalMs: input.totalMs,
+    },
+  };
 }
 
 function extractGeminiText(response: GeminiGenerateContentResponse): string {
@@ -289,14 +415,14 @@ function extractGeminiText(response: GeminiGenerateContentResponse): string {
 async function generateAnswer(prompt: string): Promise<{
   answer: string;
   model: string;
-  llmResponseTimeMs: number;
+  generationMs: number;
 }> {
   const model = getGeminiModel();
   const apiKey = getGeminiApiKey();
   const maxOutputTokens = Math.floor(
     getNumberEnv("RAG_MAX_OUTPUT_TOKENS", DEFAULT_MAX_OUTPUT_TOKENS)
   );
-  const startedAt = Date.now();
+  const startedAt = nowMs();
 
   try {
     const response = await axios.post<GeminiGenerateContentResponse>(
@@ -326,12 +452,16 @@ async function generateAnswer(prompt: string): Promise<{
     return {
       answer: extractGeminiText(response.data),
       model,
-      llmResponseTimeMs: Date.now() - startedAt,
+      generationMs: elapsedMs(startedAt),
     };
   } catch (error) {
     if (error instanceof RAGProviderError) throw error;
 
     if (error instanceof AxiosError) {
+      if (error.code === "ECONNABORTED" || error.code === "ETIMEDOUT") {
+        throw new RAGProviderTimeoutError("Gemini request timed out");
+      }
+
       const data = error.response?.data as GeminiErrorResponse | undefined;
       const message = data?.error?.message || error.message;
       const status = error.response?.status ?? "unknown";
@@ -349,79 +479,108 @@ export async function answerQuestion(
   question: string,
   organizationId: string
 ): Promise<RAGAnswerResponse> {
-  const startedAt = Date.now();
+  const startedAt = nowMs();
   const trimmedQuestion = validateRAGQuestion(question);
   const orgId = validateOrganizationId(organizationId);
-  const topK = getRAGTopK();
+  const queryType = classifyQuery(trimmedQuestion);
+  const topK = getTopKForQueryType(queryType);
   const minSimilarity = getRAGMinSimilarity();
-  const model = getGeminiModel();
 
-  console.log("RAG question received", {
+  logAIMetrics("rag.started", {
     organizationId: orgId,
     questionLength: trimmedQuestion.length,
+    queryType,
     topK,
     minSimilarity,
   });
 
-  const retrievedChunks = await searchRelevantChunks(trimmedQuestion, orgId, topK);
-  const relevantChunks = retrievedChunks.filter(
-    (chunk) => chunk.similarity >= minSimilarity
-  );
-  const contextChunks = buildContextChunks(relevantChunks);
-
-  console.log("RAG chunks retrieved", {
+  const retrieval = await retrieveRelevantChunks({
+    query: trimmedQuestion,
     organizationId: orgId,
-    retrievedCount: retrievedChunks.length,
-    relevantCount: relevantChunks.length,
-    usedCount: contextChunks.length,
+    topK,
+    minSimilarity,
+  });
+  const contextChunks = buildContextChunks(retrieval.chunks);
+
+  logAIMetrics("rag.context_built", {
+    organizationId: orgId,
+    queryType,
+    retrievedChunkCount: retrieval.metrics.retrievedChunkCount,
+    usedChunkCount: contextChunks.length,
   });
 
   if (contextChunks.length === 0) {
-    const executionTimeMs = Date.now() - startedAt;
+    const totalMs = elapsedMs(startedAt);
 
-    console.log("RAG completed without context", {
+    logAIMetrics("rag.completed_without_context", {
       organizationId: orgId,
-      executionTimeMs,
+      totalMs,
     });
 
-    return {
-      answer: "No relevant information found.",
-      sources: [],
-      metadata: {
-        model,
-        retrievedChunks: retrievedChunks.length,
-        usedChunks: 0,
-        llmResponseTimeMs: 0,
-        executionTimeMs,
-      },
-    };
+    return buildNoContextResponse({
+      metrics: retrieval.metrics,
+      totalMs,
+    });
   }
 
-  const prompt = buildGroundedPrompt(trimmedQuestion, contextChunks);
-  const generated = await generateAnswer(prompt);
-
-  console.log("RAG LLM completed", {
-    organizationId: orgId,
-    model: generated.model,
-    llmResponseTimeMs: generated.llmResponseTimeMs,
+  const prompt = buildGroundedPrompt({
+    question: trimmedQuestion,
+    queryType,
+    context: contextChunks,
   });
+  let generated: Awaited<ReturnType<typeof generateAnswer>>;
 
-  const executionTimeMs = Date.now() - startedAt;
+  try {
+    generated = await generateAnswer(prompt);
+  } catch (error) {
+    if (error instanceof RAGProviderTimeoutError) {
+      const totalMs = elapsedMs(startedAt);
 
-  console.log("RAG completed", {
+      logAIMetrics("rag.llm_timeout", {
+        organizationId: orgId,
+        totalMs,
+      });
+
+      return {
+        answer:
+          "The retrieved context was found, but answer generation timed out. Please retry the question.",
+        confidence: "low",
+        sources: contextChunks.map(toSource),
+        sourceCount: contextChunks.length,
+        metrics: {
+          ...retrieval.metrics,
+          generationMs: 60_000,
+          totalMs,
+        },
+      };
+    }
+
+    throw error;
+  }
+
+  const totalMs = elapsedMs(startedAt);
+  const sources = contextChunks.map(toSource);
+  const confidence = estimateConfidence(contextChunks);
+
+  logAIMetrics("rag.completed", {
     organizationId: orgId,
-    executionTimeMs,
+    queryType,
+    confidence,
+    sourceCount: sources.length,
+    generationMs: generated.generationMs,
+    totalMs,
+    model: generated.model,
   });
 
   return {
     answer: generated.answer,
-    sources: contextChunks.map(toSource),
-    metadata: {
-      model: generated.model,
-      retrievedChunks: retrievedChunks.length,
-      usedChunks: contextChunks.length,
-      llmResponseTimeMs: generated.llmResponseTimeMs,
-      executionTimeMs,
+    confidence,
+    sources,
+    sourceCount: sources.length,
+    metrics: {
+      ...retrieval.metrics,
+      generationMs: generated.generationMs,
+      totalMs,
     },
   };
 }

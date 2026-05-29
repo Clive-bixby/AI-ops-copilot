@@ -19,6 +19,7 @@ const ERROR_STATUS_BY_NAME: Record<string, number> = {
   VectorValidationError: 400,
   RetrievalValidationError: 400,
   RAGValidationError: 400,
+  RAGProviderTimeoutError: 504,
   RAGProviderError: 502,
 };
 

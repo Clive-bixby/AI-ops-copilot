@@ -110,7 +110,11 @@ export const askQuestion = asyncHandler(async (req, res) => {
 
   return res.status(200).json({
     question: trimmedQuestion,
-    ...result,
+    answer: result.answer,
+    confidence: result.confidence,
+    sources: result.sources,
+    sourceCount: result.sourceCount,
+    metrics: result.metrics,
   });
 });
 
