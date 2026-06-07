@@ -146,10 +146,12 @@ export async function login(input: LoginInput): Promise<LoginResult> {
     throw new AuthConfigError("JWT_SECRET is not configured");
   }
 
-  const userResult = await pool.query<{ id: string; password_hash: string }>(
-    `SELECT id, password_hash
-     FROM users
-     WHERE email = $1`,
+  const userResult = await pool.query<{ id: string; password_hash: string; organization_id: string; role: string }>(
+    `SELECT u.id, u.password_hash, m.organization_id, m.role
+     FROM users u
+     LEFT JOIN memberships m ON m.user_id = u.id
+     WHERE u.email = $1
+     LIMIT 1`,
     [email]
   );
   const user = userResult.rows[0];
@@ -164,7 +166,12 @@ export async function login(input: LoginInput): Promise<LoginResult> {
   }
 
   const token = jwt.sign(
-    { userId: user.id },
+    { 
+      sub: user.id,
+      userId: user.id,
+      organizationId: user.organization_id,
+      role: user.role
+    },
     jwtSecret,
     { expiresIn: process.env.JWT_EXPIRES_IN || "7d" }
   );

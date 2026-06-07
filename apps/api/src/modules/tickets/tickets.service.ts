@@ -81,3 +81,16 @@ export async function ingestTickets(organizationId: string, payload: unknown) {
     client.release();
   }
 }
+
+export async function listTickets(organizationId: string) {
+  const result = await pool.query<StoredTicketRow>(
+    `SELECT id, organization_id, title, description, status, priority, created_at
+     FROM tickets
+     WHERE organization_id = $1
+     ORDER BY created_at DESC
+     LIMIT 100`,
+    [organizationId]
+  );
+  return result.rows;
+}
+

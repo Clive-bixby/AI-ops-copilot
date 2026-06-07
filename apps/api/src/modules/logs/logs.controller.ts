@@ -1,6 +1,6 @@
 import { asyncHandler } from "../../utils/asyncHandler.js";
 import { createHttpError } from "../../utils/httpError.js";
-import { ingestLogs } from "./logs.service.js";
+import { ingestLogs, listLogs } from "./logs.service.js";
 
 export const ingestLogsController = asyncHandler(async (req, res) => {
   const organizationId = req.organizationId;
@@ -14,4 +14,14 @@ export const ingestLogsController = asyncHandler(async (req, res) => {
     count: logs.length,
     logs,
   });
+});
+
+export const listLogsController = asyncHandler(async (req, res) => {
+  const organizationId = req.organizationId;
+  if (!organizationId) {
+    throw createHttpError(400, "Organization ID is required");
+  }
+
+  const logs = await listLogs(organizationId);
+  return res.status(200).json(logs);
 });

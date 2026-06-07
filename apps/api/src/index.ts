@@ -1,5 +1,6 @@
 import express from "express";
 import type { Request, Response } from "express";
+import cors from "cors";
 
 import { pool } from "./core/db.js";
 import authRouter from "./modules/auth/auth.routes.js";
@@ -14,6 +15,7 @@ import aiRouter from "./modules/ai/ai.routes.js";
 const app = express();
 const PORT = Number(process.env.PORT || 3000);
 
+app.use(cors());
 app.use(express.json());
 
 app.get("/", (req: Request, res: Response) => {

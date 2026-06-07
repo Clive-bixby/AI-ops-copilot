@@ -75,3 +75,15 @@ export async function ingestLogs(organizationId: string, payload: unknown) {
     client.release();
   }
 }
+
+export async function listLogs(organizationId: string) {
+  const result = await pool.query<StoredLogRow>(
+    `SELECT id, organization_id, level, message, metadata, timestamp, created_at
+     FROM logs
+     WHERE organization_id = $1
+     ORDER BY timestamp DESC
+     LIMIT 100`,
+    [organizationId]
+  );
+  return result.rows;
+}
