@@ -1,78 +1,89 @@
-# AI Ops Copilot
+# OpsPilot AI
 
-An AI-powered operations copilot for IT/support teams. Ingest documents, logs, and tickets; retrieve relevant context with vector search; and answer questions through a RAG pipeline with citations and hallucination reduction.
+[![TypeScript](https://img.shields.io/badge/TypeScript-5.x-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
+[![React](https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=white)](https://react.dev/)
+[![Express](https://img.shields.io/badge/Express-5-000000?logo=express&logoColor=white)](https://expressjs.com/)
+[![PostgreSQL](https://img.shields.io/badge/PostgreSQL-pgvector-4169E1?logo=postgresql&logoColor=white)](https://www.postgresql.org/)
+[![Redis](https://img.shields.io/badge/Redis-BullMQ-DC382D?logo=redis&logoColor=white)](https://redis.io/)
+[![Docker](https://img.shields.io/badge/Docker-Compose-2496ED?logo=docker&logoColor=white)](https://www.docker.com/)
 
-## Highlights
+**OpsPilot AI** is a production-grade AI operations copilot that ingests logs, tickets, and internal documents, detects incidents, and answers operational questions with grounded, cited LLM responses.
 
-- **RAG Q&A** — Ask endpoint backed by an LLM, with citations and hallucination reduction
-- **Document ingestion** — Upload PDFs, chunk, embed, and store in pgvector for semantic retrieval
-- **Log pipeline** — Ingest and parse operational logs for analysis
-- **Ticket pipeline** — Ingest support tickets for triage and search
-- **Multi-tenant auth** — JWT auth, org scoping, RBAC, admin routes
-- **Async processing** — BullMQ + Redis for background jobs
-- **Metrics** — AI usage/latency metrics tracking
-- **Web UI** — React dashboard, copilot chat, documents, and logs views
+## Why it stands out
+- **End-to-end RAG** — ingestion → chunking → embeddings → pgvector retrieval → cited answers
+- **Multi-source intelligence** — documents, logs, and tickets unified into one copilot
+- **SaaS-grade backend** — JWT auth, org scoping, RBAC, multi-tenant isolation
+- **Async processing** — BullMQ + Redis workers for scalable ingestion/embedding
+- **Observability-first UI** — React dashboard, log stream, ticket matrix, document vault, copilot chat
 
 ## Architecture
-
 ```
 apps/
-  api/   Express + TypeScript backend (RAG, embeddings, ingestion, auth, RBAC)
-  web/   React + Vite + Tailwind frontend
+  api/   Express + TypeScript (RAG, ingestion, auth, RBAC, workers)
+  web/   React + Vite + Tailwind (dashboard, copilot, logs, tickets, docs)
+infra: PostgreSQL (pgvector) + Redis + Docker Compose
 ```
 
-- **Database:** PostgreSQL + pgvector
-- **Queue/Cache:** Redis + BullMQ
-- **LLM/Embeddings:** configurable providers (via env)
+## Feature highlights
+- **RAG Q&A** with citations, confidence scoring, and hallucination reduction
+- **Document ingestion** (PDF/TXT/CSV/MD/JSON/LOG) with chunking + embeddings
+- **Log pipeline** — ingest, parse, filter, stream
+- **Ticket pipeline** — ingest (JSON/CSV), triage, matrix view
+- **Semantic search** across all knowledge sources
+- **Admin panel** with role-gated access
+- **Dockerized** services with cloud-ready config
 
-## Getting started
+## Tech stack
+| Layer | Tech |
+|---|---|
+| Frontend | React 19, Vite, Tailwind, React Router |
+| Backend | Node.js, Express 5, TypeScript |
+| AI | LLM RAG, embeddings, pgvector cosine search |
+| Data | PostgreSQL + pgvector |
+| Queue | Redis + BullMQ |
+| Auth | JWT, org scoping, RBAC |
+| DevOps | Docker, Docker Compose |
 
-### Prerequisites
-
-- Node.js 18+
-- PostgreSQL with pgvector extension
-- Redis
-
-### Setup
-
+## Quick start
 ```bash
+# 1. Install
 npm install
 cd apps/api && npm install
 cd ../web && npm install
-```
 
-Configure `apps/api/.env` (see below), then:
+# 2. Configure
+cp apps/api/.env.example apps/api/.env
+# set DATABASE_URL, REDIS_URL, JWT_SECRET, GEMINI_API_KEY
 
-```bash
-# API
+# 3. Run
 cd apps/api && npm run dev
-
-# Web (new terminal)
 cd apps/web && npm run dev
 ```
 
-### Environment
-
-Create `apps/api/.env`:
-
-```env
-PORT=3000
-DATABASE_URL=postgres://user:pass@localhost:5432/aiops
-REDIS_URL=redis://localhost:6379
-JWT_SECRET=your-secret
-LLM_API_KEY=your-key
-EMBEDDING_API_KEY=your-key
+Or with Docker:
+```bash
+docker compose up --build
 ```
 
-Do not commit `.env` files or API keys.
+## Environment
+See `apps/api/.env.example`. Never commit secrets.
 
-## Scripts
-
-- API: `npm run dev` (tsx watch)
-- Web: `npm run dev`, `npm run build`, `npm run lint`, `npm run preview`
+## Project structure
+```
+apps/api/src
+  core/        db, queue
+  modules/     auth, documents, logs, tickets, ai, admin
+  middleware/  auth, org, rbac, upload, error
+  workers/     background ingestion
+apps/web/src
+  pages/       Dashboard, Copilot, Logs, Tickets, Documents, Search, Admin, Settings
+  components/  Layout, navigation
+```
 
 ## Security
+- Secrets via environment variables
+- JWT auth with org-scoped RBAC
+- Uploads and runtime data gitignored
 
-- Secrets are loaded from environment variables; never committed.
-- Uploads and docker data are gitignored.
-- Auth enforced via middleware with org scoping and RBAC.
+## Author
+Built by Aryan Yadav — [GitHub](https://github.com/Clive-bixby)
