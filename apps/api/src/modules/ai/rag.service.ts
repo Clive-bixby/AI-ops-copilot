@@ -6,6 +6,7 @@ import {
   retrieveRelevantChunks,
 } from "./retrieval.service.js";
 import type { CitationSource, RetrievalMetrics } from "./retrieval.service.js";
+import { pool } from "../../core/db.js";
 import { elapsedMs, logAIMetrics, nowMs } from "./aiMetrics.util.js";
 
 const DEFAULT_RAG_TOP_K = 5;
@@ -251,6 +252,56 @@ function toSource(chunk: CitationSource): RAGSource {
     similarity: Number(chunk.similarity.toFixed(4)),
     preview: chunk.preview,
   };
+}
+
+async function fetchFallbackContextChunks(
+  question: string,
+  organizationId: string
+): Promise<CitationSource[]> {
+  const term = `%${question.slice(0, 80)}%`;
+  const chunks: CitationSource[] = [];
+
+  let logs = await pool.query<{ id: string; message: string; level: string }>(
+    `SELECT id, message, level FROM logs WHERE organization_id=$1 AND message ILIKE $2 LIMIT 5`,
+    [organizationId, term]
+  );
+  if (logs.rows.length === 0) {
+    logs = await pool.query<{ id: string; message: string; level: string }>(
+      `SELECT id, message, level FROM logs WHERE organization_id=$1 ORDER BY timestamp DESC LIMIT 5`,
+      [organizationId]
+    );
+  }
+  for (const r of logs.rows) {
+    chunks.push({
+      documentId: r.id,
+      chunkIndex: 0,
+      similarity: 0.7,
+      preview: r.message.slice(0, 180),
+      content: `[${r.level}] ${r.message}`,
+    });
+  }
+
+  let tickets = await pool.query<{ id: string; title: string; description: string | null; priority: string; status: string }>(
+    `SELECT id, title, description, priority, status FROM tickets WHERE organization_id=$1 AND (title ILIKE $2 OR COALESCE(description,'') ILIKE $2) LIMIT 5`,
+    [organizationId, term]
+  );
+  if (tickets.rows.length === 0) {
+    tickets = await pool.query<{ id: string; title: string; description: string | null; priority: string; status: string }>(
+      `SELECT id, title, description, priority, status FROM tickets WHERE organization_id=$1 ORDER BY created_at DESC LIMIT 5`,
+      [organizationId]
+    );
+  }
+  for (const r of tickets.rows) {
+    chunks.push({
+      documentId: r.id,
+      chunkIndex: 0,
+      similarity: 0.7,
+      preview: r.title.slice(0, 180),
+      content: `Ticket: ${r.title}\nPriority: ${r.priority}\nStatus: ${r.status}\n${r.description || ""}`,
+    });
+  }
+
+  return chunks;
 }
 
 function truncateToTokenBudget(content: string, maxTokens: number): string {
@@ -500,7 +551,13 @@ export async function answerQuestion(
     topK,
     minSimilarity,
   });
-  const contextChunks = buildContextChunks(retrieval.chunks);
+
+  let retrievedChunks = retrieval.chunks;
+  if (retrievedChunks.length === 0) {
+    retrievedChunks = await fetchFallbackContextChunks(trimmedQuestion, orgId);
+  }
+
+  const contextChunks = buildContextChunks(retrievedChunks);
 
   logAIMetrics("rag.context_built", {
     organizationId: orgId,
