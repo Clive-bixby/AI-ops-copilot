@@ -5,12 +5,14 @@ const navItems = [
   { icon: 'dashboard', label: 'Dashboard', to: '/' },
   { icon: 'psychology', label: 'AI Copilot', to: '/copilot' },
   { icon: 'description', label: 'Documents', to: '/documents' },
+  { icon: 'confirmation_number', label: 'Tickets', to: '/tickets' },
   { icon: 'terminal', label: 'Logs', to: '/logs' },
+  { icon: 'search', label: 'Search', to: '/search' },
+  { icon: 'admin_panel_settings', label: 'Admin', to: '/admin' },
 ];
 
 const bottomNavItems = [
-  { icon: 'settings', label: 'Settings', to: '#' },
-  { icon: 'help', label: 'Support', to: '#' },
+  { icon: 'settings', label: 'Settings', to: '/settings' },
 ];
 
 interface SideNavBarProps {
