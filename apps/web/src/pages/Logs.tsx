@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { apiCall } from '../lib/api';
 
 interface Log {
@@ -13,20 +13,79 @@ export function Logs() {
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedLevel, setSelectedLevel] = useState('ALL');
+  const [ingestText, setIngestText] = useState('');
+  const [ingesting, setIngesting] = useState(false);
+  const [ingestError, setIngestError] = useState('');
+  const [ingestSuccess, setIngestSuccess] = useState('');
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
-  useEffect(() => {
-    const fetchLogs = async () => {
+  const fetchLogs = async () => {
+    setLoading(true);
+    try {
+      const data = await apiCall('/logs');
+      setLogs(data as Log[]);
+    } catch (error) {
+      console.error('Failed to load logs', error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => { fetchLogs(); }, []);
+
+  const handleIngest = async () => {
+    setIngestError('');
+    setIngestSuccess('');
+    const trimmed = ingestText.trim();
+    if (!trimmed) {
+      setIngestError('Enter at least one log line');
+      return;
+    }
+
+    setIngesting(true);
+    try {
+      let payload: unknown;
       try {
-        const data = await apiCall('/logs');
-        setLogs(data as Log[]);
-      } catch (error) {
-        console.error("Failed to load logs", error);
-      } finally {
-        setLoading(false);
+        const parsed = JSON.parse(trimmed);
+        payload = parsed;
+      } catch {
+        payload = { logs: trimmed.split('\n').map((l) => l.trim()).filter(Boolean) };
       }
-    };
-    fetchLogs();
-  }, []);
+
+      if (Array.isArray(payload) && payload.length === 0) {
+        setIngestError('No log entries found');
+        setIngesting(false);
+        return;
+      }
+      if (
+        typeof payload === 'object' &&
+        payload !== null &&
+        'logs' in (payload as any) &&
+        Array.isArray((payload as any).logs) &&
+        (payload as any).logs.length === 0
+      ) {
+        setIngestError('No log entries found');
+        setIngesting(false);
+        return;
+      }
+
+      await apiCall('/logs/ingest', { method: 'POST', body: JSON.stringify(payload) });
+      setIngestText('');
+      setIngestSuccess('Logs ingested successfully');
+      await fetchLogs();
+    } catch (e: any) {
+      setIngestError(e?.message || 'Ingest failed');
+    } finally {
+      setIngesting(false);
+    }
+  };
+
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const text = await file.text();
+    setIngestText(text);
+  };
 
   const getLevelStyles = (level: string) => {
     const l = (level || '').toLowerCase();
@@ -37,41 +96,54 @@ export function Logs() {
     return 'bg-surface-variant text-on-surface-variant border-outline-variant/20';
   };
 
-  const filteredLogs = logs.filter(log => {
+  const filteredLogs = logs.filter((log) => {
     const matchesLevel = selectedLevel === 'ALL' || log.level?.toUpperCase() === selectedLevel;
     const matchesSearch = log.message?.toLowerCase().includes(searchQuery.toLowerCase()) ||
-                          log.level?.toLowerCase().includes(searchQuery.toLowerCase());
+      log.level?.toLowerCase().includes(searchQuery.toLowerCase());
     return matchesLevel && matchesSearch;
   });
 
   return (
     <div className="flex-1 flex flex-col h-full bg-background overflow-hidden relative pb-16">
-      {/* Filter Bar Area */}
       <section className="bg-surface-container py-5 px-4 md:px-8 border-b border-outline-variant/15 shrink-0 w-full">
         <div className="flex flex-col gap-4 max-w-7xl mx-auto">
-          {/* Search Input */}
+          <textarea
+            value={ingestText}
+            onChange={(e) => setIngestText(e.target.value)}
+            placeholder="Paste log lines or JSON payload"
+            className="w-full bg-surface border border-outline-variant/20 rounded-xl p-3 text-on-surface font-body-sm min-h-[80px]"
+          />
+          <div className="flex gap-2">
+            <button onClick={handleIngest} disabled={ingesting} className="bg-primary text-on-primary px-4 py-2 rounded-xl font-bold disabled:opacity-50">
+              {ingesting ? 'Ingesting...' : 'Ingest Logs'}
+            </button>
+            <button onClick={() => fileInputRef.current?.click()} className="bg-surface-variant text-on-surface px-4 py-2 rounded-xl font-bold">
+              Upload File
+            </button>
+          </div>
+          <input ref={fileInputRef} type="file" accept=".json,.csv,.log,.txt" className="hidden" onChange={handleFileUpload} />
+          {ingestError && <div className="text-error text-sm">{ingestError}</div>}
+          {ingestSuccess && <div className="text-primary text-sm">{ingestSuccess}</div>}
           <div className="relative w-full">
             <span className="material-symbols-outlined absolute left-3.5 top-1/2 -translate-y-1/2 text-on-surface-variant/50 text-[20px]">search</span>
-            <input 
-              className="w-full bg-surface border border-outline-variant/20 rounded-xl py-2.5 pl-11 pr-4 text-on-surface font-body-sm text-body-sm focus:outline-none focus:border-primary/50 focus:ring-1 focus:ring-primary/20 placeholder-on-surface-variant/40 transition-colors" 
-              placeholder="Filter logs by message, keyword, or level..." 
+            <input
+              className="w-full bg-surface border border-outline-variant/20 rounded-xl py-2.5 pl-11 pr-4 text-on-surface font-body-sm text-body-sm focus:outline-none focus:border-primary/50 focus:ring-1 focus:ring-primary/20 placeholder-on-surface-variant/40 transition-colors"
+              placeholder="Filter logs by message, keyword, or level..."
               type="text"
               value={searchQuery}
-              onChange={e => setSearchQuery(e.target.value)}
+              onChange={(e) => setSearchQuery(e.target.value)}
               aria-label="Filter logs"
             />
           </div>
-
-          {/* Filters Row */}
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div className="flex items-center bg-background border border-outline-variant/15 rounded-xl p-1">
-              {['ALL', 'INFO', 'WARN', 'ERROR'].map(lvl => (
-                <button 
+              {['ALL', 'INFO', 'WARN', 'ERROR'].map((lvl) => (
+                <button
                   key={lvl}
                   onClick={() => setSelectedLevel(lvl)}
                   className={`px-4 py-1.5 rounded-lg font-label-caps text-[11px] font-bold tracking-wider uppercase transition-all ${
-                    selectedLevel === lvl 
-                      ? 'bg-surface-variant text-on-surface shadow-md' 
+                    selectedLevel === lvl
+                      ? 'bg-surface-variant text-on-surface shadow-md'
                       : 'text-on-surface-variant/60 hover:text-on-surface hover:bg-surface-variant/20'
                   }`}
                 >
@@ -79,7 +151,6 @@ export function Logs() {
                 </button>
               ))}
             </div>
-            
             <div className="text-on-surface-variant/40 font-code-sm text-[11px] font-medium">
               Showing {filteredLogs.length} of {logs.length} indexed event packets
             </div>
@@ -87,7 +158,6 @@ export function Logs() {
         </div>
       </section>
 
-      {/* Log Stream Container */}
       <section className="flex-1 overflow-y-auto log-scroll bg-background/50 relative flex flex-col w-full h-full pb-20">
         <div className="max-w-7xl mx-auto w-full px-4 md:px-8 py-4">
           <div className="bg-[#0c0c0d] border border-outline-variant/15 rounded-2xl overflow-hidden shadow-2xl">
@@ -117,11 +187,11 @@ export function Logs() {
                   </tr>
                 ) : (
                   filteredLogs.map((log, index) => (
-                    <tr 
-                      key={log.id || index} 
+                    <tr
+                      key={log.id || index}
                       className={`hover:bg-surface-container/30 transition-colors group ${
-                        log.level?.toLowerCase() === 'error' 
-                          ? 'bg-error-container/5 border-l-2 border-l-error' 
+                        log.level?.toLowerCase() === 'error'
+                          ? 'bg-error-container/5 border-l-2 border-l-error'
                           : index % 2 === 0 ? 'bg-background/20' : ''
                       }`}
                     >
@@ -137,8 +207,8 @@ export function Logs() {
                       </td>
                       <td className="py-3 px-4 align-top break-all select-text">
                         <div className={`font-code-md text-code-md leading-relaxed ${
-                          log.level?.toLowerCase() === 'error' 
-                            ? 'text-error font-semibold' 
+                          log.level?.toLowerCase() === 'error'
+                            ? 'text-error font-semibold'
                             : 'text-on-surface/90 group-hover:text-primary transition-colors'
                         }`}>
                           {log.message}

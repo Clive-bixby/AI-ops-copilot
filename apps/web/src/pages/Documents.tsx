@@ -1,4 +1,5 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import { apiCall } from '../lib/api';
 
 interface DocumentItem {
   id: string;
@@ -10,63 +11,92 @@ interface DocumentItem {
   icon: string;
 }
 
-const mockDocuments: DocumentItem[] = [
-  {
-    id: 'doc-1',
-    name: 'runbook-deploy.pdf',
-    type: 'PDF',
-    status: 'Ready',
-    uploadedBy: 'sysadmin',
-    uploadedAt: 'Oct 24, 14:30',
-    icon: 'picture_as_pdf',
-  },
-  {
-    id: 'doc-2',
-    name: 'postmortem-03.txt',
-    type: 'TXT',
-    status: 'Processing',
-    uploadedBy: 'auto-job-runner',
-    uploadedAt: 'Oct 24, 15:10',
-    icon: 'description',
-  },
-  {
-    id: 'doc-3',
-    name: 'k8s-cluster-config.yaml',
-    type: 'YAML',
-    status: 'Ready',
-    uploadedBy: 'devops-lead',
-    uploadedAt: 'Oct 23, 09:15',
-    icon: 'code',
-  },
-  {
-    id: 'doc-4',
-    name: 'auth-service-logs-Q2.csv',
-    type: 'CSV',
-    status: 'Failed',
-    uploadedBy: 'data-eng',
-    uploadedAt: 'Oct 22, 18:45',
-    icon: 'table_chart',
-  },
-];
+function typeFromName(name: string): string {
+  const ext = name.split('.').pop()?.toUpperCase();
+  return ext || 'FILE';
+}
+
+function iconFromType(type: string): string {
+  if (type === 'PDF') return 'picture_as_pdf';
+  if (type === 'CSV') return 'table_chart';
+  if (type === 'YAML' || type === 'YML') return 'code';
+  return 'description';
+}
+
+function statusFromProcessing(s?: string): DocumentItem['status'] {
+  if (s === 'processed') return 'Ready';
+  if (s === 'failed') return 'Failed';
+  return 'Processing';
+}
 
 export function Documents() {
-  const [documents] = useState<DocumentItem[]>(mockDocuments);
+  const [documents, setDocuments] = useState<DocumentItem[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [uploading, setUploading] = useState(false);
   const [statusFilter, setStatusFilter] = useState('All');
   const [typeFilter, setTypeFilter] = useState('All');
   const [searchQuery, setSearchQuery] = useState('');
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const filteredDocuments = documents.filter(doc => {
+  const fetchDocuments = async () => {
+    setLoading(true);
+    try {
+      const data = await apiCall('/documents');
+      const mapped: DocumentItem[] = (data as any[]).map((d) => {
+        const type = typeFromName(d.filename);
+        return {
+          id: d.id,
+          name: d.filename,
+          type,
+          status: statusFromProcessing(d.processingStatus),
+          uploadedBy: '-',
+          uploadedAt: new Date(d.createdAt).toLocaleString(),
+          icon: iconFromType(type),
+        };
+      });
+      setDocuments(mapped);
+    } catch (error) {
+      console.error('Failed to load documents', error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchDocuments();
+  }, []);
+
+  const handleUploadClick = () => fileInputRef.current?.click();
+
+  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setUploading(true);
+    try {
+      const formData = new FormData();
+      formData.append('file', file);
+      await apiCall('/documents/upload', { method: 'POST', body: formData });
+      await fetchDocuments();
+    } catch (error) {
+      console.error('Upload failed', error);
+    } finally {
+      setUploading(false);
+      if (fileInputRef.current) fileInputRef.current.value = '';
+    }
+  };
+
+  const filteredDocuments = documents.filter((doc) => {
     const matchesStatus = statusFilter === 'All' || doc.status === statusFilter;
     const matchesType = typeFilter === 'All' || doc.type === typeFilter;
-    const matchesSearch = doc.name.toLowerCase().includes(searchQuery.toLowerCase()) || 
-                          doc.uploadedBy.toLowerCase().includes(searchQuery.toLowerCase());
+    const matchesSearch =
+      doc.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      doc.uploadedBy.toLowerCase().includes(searchQuery.toLowerCase());
     return matchesStatus && matchesType && matchesSearch;
   });
 
   return (
     <div className="flex-1 overflow-y-auto p-4 md:p-8 bg-background custom-scrollbar w-full pb-24">
       <div className="max-w-7xl mx-auto space-y-6">
-        {/* Header Section */}
         <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-4">
           <div>
             <h2 className="font-headline-xl text-[28px] md:text-[36px] text-on-surface font-extrabold tracking-tight leading-none">
@@ -76,19 +106,30 @@ export function Documents() {
               Manage and index your organizational knowledge base for RAG copilot searches.
             </p>
           </div>
-          <button className="flex items-center justify-center gap-2 bg-primary hover:bg-primary/95 text-on-primary px-6 py-3 rounded-xl font-body-md text-body-md font-bold transition-all shadow-[0_4px_15px_rgba(192,193,255,0.12)] w-full sm:w-auto">
+          <button
+            onClick={handleUploadClick}
+            disabled={uploading}
+            className="flex items-center justify-center gap-2 bg-primary hover:bg-primary/95 text-on-primary px-6 py-3 rounded-xl font-body-md text-body-md font-bold transition-all shadow-[0_4px_15px_rgba(192,193,255,0.12)] w-full sm:w-auto disabled:opacity-50"
+          >
             <span className="material-symbols-outlined text-[20px]">upload_file</span>
-            Upload Document
+            {uploading ? 'Uploading...' : 'Upload Document'}
           </button>
+          <input
+            ref={fileInputRef}
+            type="file"
+            className="hidden"
+            onChange={handleFileChange}
+            aria-label="Upload document"
+          />
         </div>
 
         {/* Filters Bar */}
         <div className="bg-surface-container-low border border-outline-variant/15 rounded-2xl p-4 flex flex-col md:flex-row gap-4 items-center justify-between">
           <div className="flex flex-col sm:flex-row gap-3 items-center w-full md:w-auto">
             <div className="relative w-full sm:w-44">
-              <select 
+              <select
                 value={statusFilter}
-                onChange={e => setStatusFilter(e.target.value)}
+                onChange={(e) => setStatusFilter(e.target.value)}
                 aria-label="Filter by Status"
                 title="Filter by Status"
                 className="appearance-none w-full bg-surface border border-outline-variant/20 text-on-surface rounded-xl pl-3 pr-10 py-2 font-body-sm text-body-sm focus:ring-1 focus:ring-primary focus:border-primary outline-none transition-all cursor-pointer"
@@ -100,11 +141,11 @@ export function Documents() {
               </select>
               <span className="material-symbols-outlined absolute right-3 top-1/2 -translate-y-1/2 text-on-surface-variant/60 pointer-events-none text-[18px]">expand_more</span>
             </div>
-            
+
             <div className="relative w-full sm:w-44">
-              <select 
+              <select
                 value={typeFilter}
-                onChange={e => setTypeFilter(e.target.value)}
+                onChange={(e) => setTypeFilter(e.target.value)}
                 aria-label="Filter by Type"
                 title="Filter by Type"
                 className="appearance-none w-full bg-surface border border-outline-variant/20 text-on-surface rounded-xl pl-3 pr-10 py-2 font-body-sm text-body-sm focus:ring-1 focus:ring-primary focus:border-primary outline-none transition-all cursor-pointer"
@@ -118,23 +159,18 @@ export function Documents() {
               <span className="material-symbols-outlined absolute right-3 top-1/2 -translate-y-1/2 text-on-surface-variant/60 pointer-events-none text-[18px]">expand_more</span>
             </div>
           </div>
-          
+
           <div className="flex gap-4 items-center w-full md:w-auto justify-between md:justify-end">
             <div className="relative w-full sm:w-64">
               <span className="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-on-surface-variant/50 text-[18px]">search</span>
-              <input 
-                className="w-full bg-surface border border-outline-variant/20 rounded-xl py-2 pl-10 pr-4 font-body-sm text-body-sm text-on-surface focus:ring-1 focus:ring-primary focus:border-primary outline-none placeholder:text-on-surface-variant/40" 
-                placeholder="Filter files..." 
+              <input
+                className="w-full bg-surface border border-outline-variant/20 rounded-xl py-2 pl-10 pr-4 font-body-sm text-body-sm text-on-surface focus:ring-1 focus:ring-primary focus:border-primary outline-none placeholder:text-on-surface-variant/40"
+                placeholder="Filter files..."
                 type="text"
                 value={searchQuery}
-                onChange={e => setSearchQuery(e.target.value)}
+                onChange={(e) => setSearchQuery(e.target.value)}
               />
             </div>
-            <div className="h-6 w-px bg-outline-variant/20 hidden sm:block"></div>
-            <button className="flex items-center gap-1.5 text-on-surface-variant hover:text-primary transition-colors font-body-sm text-body-sm shrink-0">
-              <span className="material-symbols-outlined text-[16px]">sort</span>
-              Sort
-            </button>
           </div>
         </div>
 
@@ -144,30 +180,29 @@ export function Documents() {
             <table className="w-full text-left border-collapse min-w-[800px]">
               <thead>
                 <tr className="border-b border-outline-variant/15 bg-surface-container">
-                  <th className="p-4 w-12">
-                    <input className="rounded bg-background border-outline-variant/35 text-primary focus:ring-primary cursor-pointer w-4 h-4" type="checkbox" title="Select all documents" aria-label="Select all documents"/>
-                  </th>
                   <th className="p-4 font-label-caps text-label-caps text-on-surface-variant/70 tracking-wider uppercase">Document Name</th>
                   <th className="p-4 font-label-caps text-label-caps text-on-surface-variant/70 tracking-wider uppercase w-28">Type</th>
                   <th className="p-4 font-label-caps text-label-caps text-on-surface-variant/70 tracking-wider uppercase w-36">Status</th>
                   <th className="p-4 font-label-caps text-label-caps text-on-surface-variant/70 tracking-wider uppercase hidden lg:table-cell">Uploaded By</th>
                   <th className="p-4 font-label-caps text-label-caps text-on-surface-variant/70 tracking-wider uppercase hidden sm:table-cell w-40">Date Ingested</th>
-                  <th className="p-4 w-24"></th>
                 </tr>
               </thead>
               <tbody className="font-code-md text-code-md divide-y divide-outline-variant/5">
-                {filteredDocuments.length === 0 ? (
+                {loading ? (
                   <tr>
-                    <td colSpan={7} className="p-8 text-center text-on-surface-variant/60 font-body-sm">
-                      No operational documents matched the selected filters.
+                    <td colSpan={5} className="p-8 text-center text-on-surface-variant/60 font-body-sm">
+                      Loading documents...
+                    </td>
+                  </tr>
+                ) : filteredDocuments.length === 0 ? (
+                  <tr>
+                    <td colSpan={5} className="p-8 text-center text-on-surface-variant/60 font-body-sm">
+                      No operational documents found.
                     </td>
                   </tr>
                 ) : (
-                  filteredDocuments.map(doc => (
+                  filteredDocuments.map((doc) => (
                     <tr key={doc.id} className="zebra-row table-row-hover group transition-colors">
-                      <td className="p-4">
-                        <input className="rounded bg-background border-outline-variant/35 text-primary focus:ring-primary cursor-pointer w-4 h-4" type="checkbox" title={`Select ${doc.name}`} aria-label={`Select ${doc.name}`}/>
-                      </td>
                       <td className="p-4 flex items-center gap-3">
                         <div className={`w-8 h-8 rounded-lg flex items-center justify-center shrink-0 ${
                           doc.status === 'Failed' ? 'bg-error/10 text-error' : 'bg-primary/10 text-primary border border-primary/10'
@@ -184,22 +219,20 @@ export function Documents() {
                       <td className="p-4">
                         {doc.status === 'Ready' && (
                           <div className="flex items-center gap-1.5 text-primary">
-                            <span className="relative flex h-2 w-2">
-                              <span className="relative inline-flex rounded-full h-2 w-2 bg-primary shadow-[0_0_8px_#c0c1ff]"></span>
-                            </span>
+                            <span className="relative inline-flex rounded-full h-2 w-2 bg-primary shadow-[0_0_8px_#c0c1ff]"></span>
                             <span className="font-body-sm text-body-sm font-semibold">Indexed</span>
                           </div>
                         )}
                         {doc.status === 'Processing' && (
                           <div className="flex items-center gap-1.5 text-[#facc15]">
                             <span className="material-symbols-outlined text-[14px] animate-spin">sync</span>
-                            <span className="font-body-sm text-body-sm font-semibold">Chunking...</span>
+                            <span className="font-body-sm text-body-sm font-semibold">Processing...</span>
                           </div>
                         )}
                         {doc.status === 'Failed' && (
                           <div className="flex items-center gap-1.5 text-error">
                             <span className="material-symbols-outlined text-[14px]">error</span>
-                            <span className="font-body-sm text-body-sm font-semibold">Ingest Failed</span>
+                            <span className="font-body-sm text-body-sm font-semibold">Failed</span>
                           </div>
                         )}
                       </td>
@@ -209,40 +242,15 @@ export function Documents() {
                       <td className="p-4 text-on-surface-variant/60 hidden sm:table-cell font-body-sm font-medium">
                         {doc.uploadedAt}
                       </td>
-                      <td className="p-4">
-                        <div className="flex items-center justify-end gap-2 md:opacity-0 group-hover:opacity-100 transition-opacity">
-                          {doc.status === 'Failed' ? (
-                            <button className="text-on-surface-variant hover:text-primary transition-colors p-1.5 hover:bg-surface-variant/50 rounded-lg" title="Retry Ingest">
-                              <span className="material-symbols-outlined text-[18px]">refresh</span>
-                            </button>
-                          ) : (
-                            <button className="text-on-surface-variant hover:text-primary transition-colors p-1.5 hover:bg-surface-variant/50 rounded-lg" title="View Contents">
-                              <span className="material-symbols-outlined text-[18px]">visibility</span>
-                            </button>
-                          )}
-                          <button className="text-on-surface-variant hover:text-error transition-colors p-1.5 hover:bg-surface-variant/50 rounded-lg" title="Delete Document">
-                            <span className="material-symbols-outlined text-[18px]">delete</span>
-                          </button>
-                        </div>
-                      </td>
                     </tr>
                   ))
                 )}
               </tbody>
             </table>
           </div>
-          
-          {/* Table Footer */}
+
           <div className="bg-surface-container/60 p-4 flex justify-between items-center font-body-sm text-body-sm text-on-surface-variant border-t border-outline-variant/15">
             <span className="font-medium">Showing {filteredDocuments.length} of {documents.length} operational papers</span>
-            <div className="flex gap-2">
-              <button className="p-1 rounded hover:bg-surface-variant/50 disabled:opacity-30 disabled:hover:bg-transparent transition-colors" disabled>
-                <span className="material-symbols-outlined text-sm">chevron_left</span>
-              </button>
-              <button className="p-1 rounded hover:bg-surface-variant/50 disabled:opacity-30 disabled:hover:bg-transparent transition-colors" disabled>
-                <span className="material-symbols-outlined text-sm">chevron_right</span>
-              </button>
-            </div>
           </div>
         </div>
       </div>
