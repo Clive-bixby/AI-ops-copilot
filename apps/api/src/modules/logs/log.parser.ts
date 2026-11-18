@@ -62,9 +62,16 @@ function toSafeMessage(input: unknown): string {
 }
 
 function parseObjectLog(raw: Record<string, unknown>): NormalizedLog {
-  const message = toSafeMessage(raw.message ?? raw.msg ?? raw.event ?? raw.text);
+  let message = toSafeMessage(raw.message ?? raw.msg ?? raw.event ?? raw.text);
   if (!message) {
-    throw new LogParseError("Log message is required");
+    const fallback = Object.entries(raw)
+      .filter(([key]) => !RESERVED_LOG_KEYS.has(key))
+      .map(([key, value]) => `${key}=${String(value)}`)
+      .join(" ");
+    if (!fallback) {
+      throw new LogParseError("Log message is required");
+    }
+    message = fallback;
   }
 
   const rawMetadata = raw.metadata;
@@ -116,19 +123,22 @@ function parseSingleLog(raw: unknown): NormalizedLog {
 
 export function parseRawLogs(payload: unknown): NormalizedLog[] {
   if (Array.isArray(payload)) {
-    if (payload.length === 0) {
+    const entries = payload.filter((e) => !(typeof e === "string" && e.trim() === ""));
+    if (entries.length === 0) {
       throw new LogParseError("At least one log entry is required");
     }
-
-    return payload.map((entry) => parseSingleLog(entry));
+    return entries.map((entry) => parseSingleLog(entry));
   }
 
   if (isRecord(payload) && Array.isArray(payload.logs)) {
-    if (payload.logs.length === 0) {
+    const entries = payload.logs.filter(
+      (e) => !(typeof e === "string" && e.trim() === "")
+    );
+    if (entries.length === 0) {
       throw new LogParseError("At least one log entry is required");
     }
 
-    return payload.logs.map((entry) => parseSingleLog(entry));
+    return entries.map((entry) => parseSingleLog(entry));
   }
 
   return [parseSingleLog(payload)];
