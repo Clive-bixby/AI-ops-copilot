@@ -57,9 +57,18 @@ export async function parseDocument(filePath: string): Promise<string> {
 
   const extension = path.extname(normalizedPath).toLowerCase();
 
+  const textExtensions = new Set([
+    ".txt",
+    ".csv",
+    ".md",
+    ".json",
+    ".log",
+    ".tsv",
+  ]);
+
   try {
     const text =
-      extension === ".txt"
+      textExtensions.has(extension)
         ? await readTextFile(normalizedPath)
         : extension === ".pdf"
           ? await readPdfFile(normalizedPath)
@@ -67,7 +76,7 @@ export async function parseDocument(filePath: string): Promise<string> {
 
     if (!text) {
       throw new DocumentParserError(
-        "Unsupported document format. Supported formats: .txt, .pdf"
+        "Unsupported document format. Supported formats: .txt, .csv, .md, .json, .log, .tsv, .pdf"
       );
     }
 
