@@ -34,6 +34,9 @@ export type RetrievedContext = {
 };
 
 export type CitationSource = {
+  /** Vector hits always come from indexed document chunks. */
+  sourceType: "document";
+  matchType: "vector";
   documentId: string;
   chunkIndex: number;
   similarity: number;
@@ -205,6 +208,8 @@ function preserveDocumentOrderWhenUseful(
 
 function toCitationSource(chunk: SimilarityResult): CitationSource {
   return {
+    sourceType: "document",
+    matchType: "vector",
     documentId: chunk.documentId,
     chunkIndex: chunk.chunkIndex,
     similarity: chunk.similarity,

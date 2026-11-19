@@ -244,12 +244,23 @@ export function Search() {
               <div className="mt-2 flex flex-wrap gap-1.5">
                 {answer.response.sources.map((source) => (
                   <button
-                    key={`${source.documentId}-${source.chunkIndex}`}
-                    onClick={() => navigate(`/documents?doc=${source.documentId}`)}
+                    key={`${source.sourceType}-${source.sourceId}-${source.chunkIndex}`}
+                    onClick={() => {
+                      if (source.documentId) {
+                        navigate(`/documents?doc=${source.documentId}`);
+                      }
+                    }}
                     className="flex items-center gap-1 rounded border border-ai-border bg-surface px-1.5 py-1 font-mono text-[10px] text-on-surface-variant transition-colors hover:border-ai-ink"
                   >
                     <Icon name="description" size={12} className="text-ai-ink" />
-                    {shortId(source.documentId, 6)} · chunk {source.chunkIndex} · {source.similarity.toFixed(3)}
+                    {shortId(source.sourceId, 6)} · {source.sourceType}
+                    {source.sourceType === 'document'
+                      ? ` · chunk ${source.chunkIndex}`
+                      : ''}{' '}
+                    ·{' '}
+                    {source.similarity !== null
+                      ? source.similarity.toFixed(3)
+                      : 'keyword'}
                   </button>
                 ))}
               </div>

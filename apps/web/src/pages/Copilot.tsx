@@ -122,7 +122,7 @@ export function Copilot() {
               '',
               ...message.response.sources.map(
                 (source) =>
-                  `- ${source.documentId} · chunk ${source.chunkIndex} · similarity ${source.similarity.toFixed(4)}`
+                  `- ${source.sourceType} ${source.sourceId} · ${source.matchType === 'vector' && source.similarity !== null ? `similarity ${source.similarity.toFixed(4)}` : 'keyword match'}`
               ),
               '',
             ]
@@ -279,19 +279,26 @@ export function Copilot() {
                               <div className="mt-2 space-y-1.5">
                                 {message.response.sources.map((source) => (
                                   <button
-                                    key={`${message.id}-${source.documentId}-${source.chunkIndex}`}
-                                    onClick={() => navigate(`/documents?doc=${source.documentId}`)}
+                                    key={`${message.id}-${source.sourceType}-${source.sourceId}-${source.chunkIndex}`}
+                                    onClick={() => {
+                                      if (source.documentId) {
+                                        navigate(`/documents?doc=${source.documentId}`);
+                                      }
+                                    }}
                                     className="flex w-full items-start gap-2 rounded border border-ai-border bg-surface p-2 text-left transition-colors hover:border-ai-ink"
                                   >
                                     <Icon name="description" size={15} className="mt-0.5 text-ai-ink" />
                                     <div className="min-w-0 flex-1">
                                       <div className="flex flex-wrap items-center gap-1.5 font-mono text-[10px] text-outline">
-                                        <span>{shortId(source.documentId, 10)}</span>
+                                        <span>{shortId(source.sourceId, 10)}</span>
                                         <span>·</span>
                                         <span>chunk {source.chunkIndex}</span>
                                         <span>·</span>
                                         <span className="text-on-surface-variant">
-                                          {source.similarity.toFixed(4)} cosine
+                                          {source.matchType === 'vector' &&
+                                          source.similarity !== null
+                                            ? `${source.similarity.toFixed(4)} cosine`
+                                            : 'keyword match'}
                                         </span>
                                       </div>
                                       <p className="mt-0.5 line-clamp-2 font-body text-body-sm text-on-surface-variant">
@@ -372,13 +379,24 @@ export function Copilot() {
             {latestResponse && latestResponse.sources.length > 0 ? (
               <div className="divide-y divide-line">
                 {latestResponse.sources.map((source, index) => (
-                  <div key={`${source.documentId}-${source.chunkIndex}-${index}`} className="p-md">
+                  <div
+                    key={`${source.sourceType}-${source.sourceId}-${index}`}
+                    className="p-md"
+                  >
                     <div className="mb-1 flex items-center justify-between gap-2">
                       <span className="font-mono text-label-sm text-outline">
                         SOURCE {index + 1} · chunk {source.chunkIndex}
                       </span>
-                      <Badge tone={source.similarity >= 0.8 ? 'ok' : 'neutral'}>
-                        {source.similarity.toFixed(3)}
+                      <Badge
+                        tone={
+                          source.similarity !== null && source.similarity >= 0.8
+                            ? 'ok'
+                            : 'neutral'
+                        }
+                      >
+                        {source.similarity !== null
+                          ? source.similarity.toFixed(3)
+                          : 'keyword'}
                       </Badge>
                     </div>
                     <p className="line-clamp-4 font-body text-body-sm text-on-surface-variant">
@@ -386,14 +404,22 @@ export function Copilot() {
                     </p>
                     <div className="mt-1.5 flex items-center justify-between">
                       <span className="font-mono text-[10px] text-outline">
-                        {shortId(source.documentId, 10)}
+                        {shortId(source.sourceId, 10)}
                       </span>
-                      <button
-                        onClick={() => navigate(`/documents?doc=${source.documentId}`)}
-                        className="font-label-lg text-label-lg font-semibold text-primary hover:underline"
-                      >
-                        Open source
-                      </button>
+                      {source.documentId ? (
+                        <button
+                          onClick={() =>
+                            navigate(`/documents?doc=${source.documentId}`)
+                          }
+                          className="font-label-lg text-label-lg font-semibold text-primary hover:underline"
+                        >
+                          Open source
+                        </button>
+                      ) : (
+                        <span className="font-mono text-[10px] uppercase tracking-wider text-outline">
+                          keyword match
+                        </span>
+                      )}
                     </div>
                   </div>
                 ))}

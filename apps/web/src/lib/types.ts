@@ -95,10 +95,18 @@ export interface SearchResponse {
   results: SearchResult[];
 }
 
+export type RagSourceType = 'document' | 'log' | 'ticket';
+export type RagMatchType = 'vector' | 'keyword';
+
 export interface RagSource {
-  documentId: string;
+  sourceType: RagSourceType;
+  sourceId: string;
+  /** null for logs and tickets, which are not documents */
+  documentId: string | null;
   chunkIndex: number;
-  similarity: number;
+  /** null for keyword matches, which have no similarity score */
+  similarity: number | null;
+  matchType: RagMatchType;
   preview: string;
 }
 
