@@ -1,259 +1,586 @@
-import { useEffect, useRef, useState } from 'react';
-import { apiCall } from '../lib/api';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { useNavigate, useSearchParams } from 'react-router-dom';
+import clsx from 'clsx';
+import { api, errorMessage } from '../lib/api';
+import { useApiData, useInterval } from '../lib/hooks';
+import {
+  fileIcon,
+  fileType,
+  formatDateTime,
+  formatNumber,
+  relativeTime,
+  shortId,
+} from '../lib/format';
+import type { DocumentDetail, DocumentSummary, Overview } from '../lib/types';
+import {
+  Badge,
+  Button,
+  CopyButton,
+  EmptyState,
+  ErrorState,
+  Icon,
+  InlineError,
+  PageHeader,
+  Pagination,
+  Panel,
+} from '../components/ui';
+import type { BadgeTone } from '../components/ui';
 
-interface DocumentItem {
-  id: string;
-  name: string;
-  type: string;
-  status: 'Ready' | 'Processing' | 'Failed';
-  uploadedBy: string;
-  uploadedAt: string;
-  icon: string;
+interface DocumentsData {
+  documents: DocumentSummary[];
+  overview: Overview | null;
 }
 
-function typeFromName(name: string): string {
-  const ext = name.split('.').pop()?.toUpperCase();
-  return ext || 'FILE';
+const STATUS_OPTIONS = ['all', 'processed', 'processing', 'pending', 'failed'];
+
+function statusTone(status: string): BadgeTone {
+  if (status === 'processed') return 'ok';
+  if (status === 'failed') return 'critical';
+  if (status === 'processing' || status === 'pending') return 'warn';
+  return 'neutral';
 }
 
-function iconFromType(type: string): string {
-  if (type === 'PDF') return 'picture_as_pdf';
-  if (type === 'CSV') return 'table_chart';
-  if (type === 'YAML' || type === 'YML') return 'code';
-  return 'description';
-}
-
-function statusFromProcessing(s?: string): DocumentItem['status'] {
-  if (s === 'processed') return 'Ready';
-  if (s === 'failed') return 'Failed';
-  return 'Processing';
+function statusLabel(status: string): string {
+  if (status === 'processed') return 'Indexed';
+  if (status === 'failed') return 'Failed';
+  if (status === 'processing') return 'Processing';
+  if (status === 'pending') return 'Queued';
+  return status;
 }
 
 export function Documents() {
-  const [documents, setDocuments] = useState<DocumentItem[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [uploading, setUploading] = useState(false);
-  const [statusFilter, setStatusFilter] = useState('All');
-  const [typeFilter, setTypeFilter] = useState('All');
-  const [searchQuery, setSearchQuery] = useState('');
-  const fileInputRef = useRef<HTMLInputElement>(null);
+  const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
 
-  const fetchDocuments = async () => {
-    setLoading(true);
-    try {
-      const data = await apiCall('/documents');
-      const mapped: DocumentItem[] = (data as any[]).map((d) => {
-        const type = typeFromName(d.filename);
-        return {
-          id: d.id,
-          name: d.filename,
-          type,
-          status: statusFromProcessing(d.processingStatus),
-          uploadedBy: '-',
-          uploadedAt: new Date(d.createdAt).toLocaleString(),
-          icon: iconFromType(type),
-        };
-      });
-      setDocuments(mapped);
-    } catch (error) {
-      console.error('Failed to load documents', error);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  useEffect(() => {
-    fetchDocuments();
+  const { data, loading, error, reload } = useApiData<DocumentsData>(async () => {
+    const [documents, overview] = await Promise.all([
+      api.documents.list(),
+      api.insights.overview().catch(() => null),
+    ]);
+    return { documents, overview };
   }, []);
 
-  const handleUploadClick = () => fileInputRef.current?.click();
+  const documents = data?.documents ?? [];
+  const overview = data?.overview ?? null;
 
-  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
+  const [query, setQuery] = useState('');
+  const [status, setStatus] = useState('all');
+  const [type, setType] = useState('all');
+  const [page, setPage] = useState(1);
+  const pageSize = 10;
+
+  const [selectedId, setSelectedId] = useState<string | null>(searchParams.get('doc'));
+  const [detail, setDetail] = useState<DocumentDetail | null>(null);
+  const [detailLoading, setDetailLoading] = useState(false);
+  const [detailError, setDetailError] = useState<string | null>(null);
+
+  const [uploading, setUploading] = useState(false);
+  const [uploadError, setUploadError] = useState<string | null>(null);
+  const [uploadSuccess, setUploadSuccess] = useState<string | null>(null);
+  const [dragActive, setDragActive] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const types = useMemo(
+    () => Array.from(new Set(documents.map((document) => fileType(document.filename)))).sort(),
+    [documents]
+  );
+
+  const filtered = useMemo(() => {
+    const needle = query.trim().toLowerCase();
+    return documents.filter((document) => {
+      if (status !== 'all' && document.processingStatus !== status) return false;
+      if (type !== 'all' && fileType(document.filename) !== type) return false;
+      if (!needle) return true;
+      return `${document.filename} ${document.id}`.toLowerCase().includes(needle);
+    });
+  }, [documents, query, status, type]);
+
+  useEffect(() => {
+    setPage(1);
+  }, [query, status, type]);
+
+  const pageItems = filtered.slice((page - 1) * pageSize, page * pageSize);
+  const hasProcessing = documents.some((document) =>
+    ['processing', 'pending'].includes(document.processingStatus)
+  );
+
+  useInterval(() => void reload(true), hasProcessing ? 5000 : null);
+
+  useEffect(() => {
+    if (documents.length > 0 && !selectedId) setSelectedId(documents[0]?.id ?? null);
+  }, [documents, selectedId]);
+
+  useEffect(() => {
+    const target = searchParams.get('doc');
+    if (target) setSelectedId(target);
+  }, [searchParams]);
+
+  useEffect(() => {
+    if (!selectedId) {
+      setDetail(null);
+      return;
+    }
+
+    let cancelled = false;
+    setDetailLoading(true);
+    setDetailError(null);
+
+    api.documents
+      .get(selectedId)
+      .then((result) => {
+        if (!cancelled) setDetail(result);
+      })
+      .catch((caught: unknown) => {
+        if (!cancelled) {
+          setDetail(null);
+          setDetailError(errorMessage(caught));
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setDetailLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedId, data]);
+
+  const resetFilters = () => {
+    setQuery('');
+    setStatus('all');
+    setType('all');
+  };
+
+  const uploadFile = async (file: File) => {
     setUploading(true);
+    setUploadError(null);
+    setUploadSuccess(null);
     try {
-      const formData = new FormData();
-      formData.append('file', file);
-      await apiCall('/documents/upload', { method: 'POST', body: formData });
-      await fetchDocuments();
-    } catch (error) {
-      console.error('Upload failed', error);
+      const result = await api.documents.upload(file);
+      setUploadSuccess(`${result.filename} uploaded. Parsing, chunking and embeddings ran on the server.`);
+      setSelectedId(result.id);
+      await reload(true);
+    } catch (caught) {
+      setUploadError(errorMessage(caught));
     } finally {
       setUploading(false);
       if (fileInputRef.current) fileInputRef.current.value = '';
     }
   };
 
-  const filteredDocuments = documents.filter((doc) => {
-    const matchesStatus = statusFilter === 'All' || doc.status === statusFilter;
-    const matchesType = typeFilter === 'All' || doc.type === typeFilter;
-    const matchesSearch =
-      doc.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      doc.uploadedBy.toLowerCase().includes(searchQuery.toLowerCase());
-    return matchesStatus && matchesType && matchesSearch;
-  });
+  const emptyButExisting = documents.length > 0 && filtered.length === 0;
 
   return (
-    <div className="flex-1 overflow-y-auto p-4 md:p-8 bg-background custom-scrollbar w-full pb-24">
-      <div className="max-w-7xl mx-auto space-y-6">
-        <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-4">
-          <div>
-            <h2 className="font-headline-xl text-[28px] md:text-[36px] text-on-surface font-extrabold tracking-tight leading-none">
-              Operational Documents
-            </h2>
-            <p className="font-body-md text-on-surface-variant/70 mt-2">
-              Manage and index your organizational knowledge base for RAG copilot searches.
-            </p>
+    <div className="space-y-5">
+      <PageHeader
+        eyebrow={
+          <>
+            <span className="eyebrow">Knowledge base</span>
+            <span className="h-1 w-1 rounded-full bg-outline" />
+            <span className="font-mono text-label-sm uppercase tracking-wider text-primary">
+              Runbook &amp; post-mortem repository
+            </span>
+            {hasProcessing ? (
+              <Badge tone="warn" pulse>
+                ingestion active
+              </Badge>
+            ) : (
+              <Badge tone="ok">pipeline idle</Badge>
+            )}
+          </>
+        }
+        title="Knowledge & Operational Docs"
+        description="Upload runbooks, RFCs and post-mortems; the API parses, chunks and embeds them into pgvector so the copilot can cite them."
+        actions={
+          <>
+            <Button variant="secondary" icon="refresh" onClick={() => void reload()} disabled={loading}>
+              Refresh
+            </Button>
+            <Button icon="upload_file" onClick={() => fileInputRef.current?.click()} disabled={uploading}>
+              {uploading ? 'Uploading…' : 'Upload document'}
+            </Button>
+          </>
+        }
+      />
+
+      <input
+        ref={fileInputRef}
+        type="file"
+        className="hidden"
+        aria-label="Upload document"
+        onChange={(event) => {
+          const file = event.target.files?.[0];
+          if (file) void uploadFile(file);
+        }}
+      />
+
+      {error && !data ? (
+        <ErrorState message={error} onRetry={() => void reload()} />
+      ) : (
+        <>
+          <div className="panel grid grid-cols-2 divide-x divide-y divide-line overflow-hidden md:grid-cols-4 md:divide-y-0">
+            {[
+              {
+                label: 'Total documents',
+                value: formatNumber(overview?.documents.total ?? documents.length),
+                hint: `${documents.filter((document) => document.processingStatus === 'processed').length} indexed`,
+                icon: 'description',
+              },
+              {
+                label: 'Embedded chunks',
+                value: formatNumber(overview?.documents.chunks ?? 0),
+                hint: 'pgvector cosine index',
+                icon: 'hub',
+              },
+              {
+                label: 'In pipeline',
+                value: formatNumber(
+                  overview
+                    ? overview.documents.processing + overview.documents.pending
+                    : documents.filter((document) => ['processing', 'pending'].includes(document.processingStatus)).length
+                ),
+                hint: 'Parsing or embedding',
+                icon: 'pending_actions',
+              },
+              {
+                label: 'Failed ingestion',
+                value: formatNumber(
+                  overview?.documents.failed ??
+                    documents.filter((document) => document.processingStatus === 'failed').length
+                ),
+                hint: 'Inspect the document inspector for the error',
+                icon: 'error',
+              },
+            ].map((stat) => (
+              <div key={stat.label} className="flex flex-col justify-between gap-2 bg-surface p-md">
+                <div className="flex items-start justify-between">
+                  <span className="mono-label text-outline">{stat.label}</span>
+                  <Icon name={stat.icon} size={16} className="text-outline" />
+                </div>
+                <span className="font-headline-md text-headline-md font-bold tabular text-on-surface">
+                  {stat.value}
+                </span>
+                <span className="font-body text-body-sm text-on-surface-variant">{stat.hint}</span>
+              </div>
+            ))}
           </div>
-          <button
-            onClick={handleUploadClick}
-            disabled={uploading}
-            className="flex items-center justify-center gap-2 bg-primary hover:bg-primary/95 text-on-primary px-6 py-3 rounded-xl font-body-md text-body-md font-bold transition-all shadow-[0_4px_15px_rgba(192,193,255,0.12)] w-full sm:w-auto disabled:opacity-50"
-          >
-            <span className="material-symbols-outlined text-[20px]">upload_file</span>
-            {uploading ? 'Uploading...' : 'Upload Document'}
-          </button>
-          <input
-            ref={fileInputRef}
-            type="file"
-            className="hidden"
-            onChange={handleFileChange}
-            aria-label="Upload document"
-          />
-        </div>
 
-        {/* Filters Bar */}
-        <div className="bg-surface-container-low border border-outline-variant/15 rounded-2xl p-4 flex flex-col md:flex-row gap-4 items-center justify-between">
-          <div className="flex flex-col sm:flex-row gap-3 items-center w-full md:w-auto">
-            <div className="relative w-full sm:w-44">
-              <select
-                value={statusFilter}
-                onChange={(e) => setStatusFilter(e.target.value)}
-                aria-label="Filter by Status"
-                title="Filter by Status"
-                className="appearance-none w-full bg-surface border border-outline-variant/20 text-on-surface rounded-xl pl-3 pr-10 py-2 font-body-sm text-body-sm focus:ring-1 focus:ring-primary focus:border-primary outline-none transition-all cursor-pointer"
-              >
-                <option value="All">Status: All</option>
-                <option value="Ready">Ready</option>
-                <option value="Processing">Processing</option>
-                <option value="Failed">Failed</option>
-              </select>
-              <span className="material-symbols-outlined absolute right-3 top-1/2 -translate-y-1/2 text-on-surface-variant/60 pointer-events-none text-[18px]">expand_more</span>
-            </div>
-
-            <div className="relative w-full sm:w-44">
-              <select
-                value={typeFilter}
-                onChange={(e) => setTypeFilter(e.target.value)}
-                aria-label="Filter by Type"
-                title="Filter by Type"
-                className="appearance-none w-full bg-surface border border-outline-variant/20 text-on-surface rounded-xl pl-3 pr-10 py-2 font-body-sm text-body-sm focus:ring-1 focus:ring-primary focus:border-primary outline-none transition-all cursor-pointer"
-              >
-                <option value="All">Type: All</option>
-                <option value="PDF">PDF</option>
-                <option value="TXT">TXT</option>
-                <option value="YAML">YAML</option>
-                <option value="CSV">CSV</option>
-              </select>
-              <span className="material-symbols-outlined absolute right-3 top-1/2 -translate-y-1/2 text-on-surface-variant/60 pointer-events-none text-[18px]">expand_more</span>
-            </div>
-          </div>
-
-          <div className="flex gap-4 items-center w-full md:w-auto justify-between md:justify-end">
-            <div className="relative w-full sm:w-64">
-              <span className="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-on-surface-variant/50 text-[18px]">search</span>
-              <input
-                className="w-full bg-surface border border-outline-variant/20 rounded-xl py-2 pl-10 pr-4 font-body-sm text-body-sm text-on-surface focus:ring-1 focus:ring-primary focus:border-primary outline-none placeholder:text-on-surface-variant/40"
-                placeholder="Filter files..."
-                type="text"
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
+          <section className="panel p-md">
+            <div
+              onDragOver={(event) => {
+                event.preventDefault();
+                setDragActive(true);
+              }}
+              onDragLeave={() => setDragActive(false)}
+              onDrop={(event) => {
+                event.preventDefault();
+                setDragActive(false);
+                const file = event.dataTransfer.files?.[0];
+                if (file && !uploading) void uploadFile(file);
+              }}
+              className={clsx(
+                'flex flex-col items-center justify-center gap-1 rounded border-2 border-dashed px-4 py-5 text-center transition-colors',
+                dragActive ? 'border-primary bg-primary-fixed/30' : 'border-outline-variant bg-surface-low'
+              )}
+            >
+              <Icon
+                name={uploading ? 'sync' : 'cloud_upload'}
+                size={24}
+                className={uploading ? 'animate-spin text-primary' : 'text-outline'}
               />
+              <div className="font-label-lg text-label-lg font-semibold text-on-surface">
+                {uploading ? 'Uploading, chunking and embedding…' : 'Drop a runbook, RFC or post-mortem here'}
+              </div>
+              <div className="font-body text-body-sm text-on-surface-variant">
+                PDF, TXT, MD, CSV, JSON or LOG · processed immediately by the API
+              </div>
+            </div>
+
+            <div className="mt-3 flex flex-col gap-2 md:flex-row md:items-center">
+              <div className="relative flex-1">
+                <Icon name="search" size={17} className="absolute left-3 top-1/2 -translate-y-1/2 text-outline" />
+                <input
+                  value={query}
+                  onChange={(event) => setQuery(event.target.value)}
+                  placeholder="Filter documents by name or id…"
+                  aria-label="Filter documents"
+                  className="input pl-9"
+                />
+              </div>
+              <select
+                value={status}
+                onChange={(event) => setStatus(event.target.value)}
+                aria-label="Filter by ingestion status"
+                className="select w-[180px]"
+              >
+                {STATUS_OPTIONS.map((option) => (
+                  <option key={option} value={option}>
+                    {option === 'all' ? 'Status: all' : statusLabel(option)}
+                  </option>
+                ))}
+              </select>
+              <select
+                value={type}
+                onChange={(event) => setType(event.target.value)}
+                aria-label="Filter by file type"
+                className="select w-[150px]"
+              >
+                <option value="all">Type: all</option>
+                {types.map((option) => (
+                  <option key={option} value={option}>
+                    {option}
+                  </option>
+                ))}
+              </select>
+              {emptyButExisting ? (
+                <Button variant="ghost" size="sm" icon="filter_alt_off" onClick={resetFilters}>
+                  Reset
+                </Button>
+              ) : null}
+            </div>
+
+            {uploadError ? <div className="mt-2"><InlineError message={uploadError} /></div> : null}
+            {uploadSuccess ? (
+              <div className="mt-2 flex items-center gap-1.5 rounded border border-success-line bg-success-surface px-3 py-2 font-body text-body-sm text-success-ink">
+                <Icon name="check_circle" size={15} /> {uploadSuccess}
+              </div>
+            ) : null}
+          </section>
+
+          <div className="grid items-start gap-gutter-desktop xl:grid-cols-12">
+            <div className="min-w-0 xl:col-span-8">
+              <Panel title="Document corpus" icon="library_books" flush meta={`${filtered.length} of ${documents.length}`}>
+                <div className="overflow-x-auto">
+                  <table className="w-full min-w-[680px] text-left">
+                    <thead>
+                      <tr className="border-b border-outline-variant bg-surface-low">
+                        <th className="px-3 py-2 mono-label text-on-surface-variant">Document</th>
+                        <th className="w-[70px] px-3 py-2 mono-label text-on-surface-variant">Type</th>
+                        <th className="w-[84px] px-3 py-2 mono-label text-on-surface-variant">Chunks</th>
+                        <th className="w-[130px] px-3 py-2 mono-label text-on-surface-variant">Status</th>
+                        <th className="w-[130px] px-3 py-2 mono-label text-on-surface-variant">Ingested</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {loading && !data ? (
+                        <tr>
+                          <td colSpan={5} className="px-4 py-10 text-center font-body text-body-sm text-outline">
+                            Loading knowledge corpus…
+                          </td>
+                        </tr>
+                      ) : pageItems.length === 0 ? (
+                        <tr>
+                          <td colSpan={5}>
+                            <EmptyState
+                              icon="library_books"
+                              title={documents.length === 0 ? 'No documents ingested' : 'No documents match these filters'}
+                              description={
+                                documents.length === 0
+                                  ? 'Upload a runbook or post-mortem to build the retrieval corpus for this organization.'
+                                  : 'Change the status, type or text filter to see more of the corpus.'
+                              }
+                              action={
+                                documents.length === 0 ? (
+                                  <Button size="sm" icon="upload_file" onClick={() => fileInputRef.current?.click()}>
+                                    Upload document
+                                  </Button>
+                                ) : (
+                                  <Button size="sm" variant="secondary" onClick={resetFilters}>
+                                    Reset filters
+                                  </Button>
+                                )
+                              }
+                            />
+                          </td>
+                        </tr>
+                      ) : (
+                        pageItems.map((document) => {
+                          const active = document.id === selectedId;
+                          return (
+                            <tr
+                              key={document.id}
+                              onClick={() => setSelectedId(document.id)}
+                              className={clsx(
+                                'cursor-pointer border-b border-line transition-colors',
+                                active ? 'bg-primary-fixed/35' : 'hover:bg-surface-low'
+                              )}
+                            >
+                              <td className="px-3 py-2.5">
+                                <div className="flex items-center gap-2">
+                                  <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded border border-outline-variant bg-surface-low text-primary">
+                                    <Icon name={fileIcon(document.filename)} size={17} />
+                                  </span>
+                                  <div className="min-w-0">
+                                    <div className="truncate font-label-lg text-label-lg font-semibold text-on-surface">
+                                      {document.filename}
+                                    </div>
+                                    <div className="font-mono text-[10px] text-outline">
+                                      {shortId(document.id, 8)}
+                                    </div>
+                                  </div>
+                                </div>
+                              </td>
+                              <td className="px-3 py-2.5">
+                                <span className="rounded border border-outline-variant bg-surface-low px-1.5 py-0.5 font-mono text-[10px] text-on-surface-variant">
+                                  {fileType(document.filename)}
+                                </span>
+                              </td>
+                              <td className="px-3 py-2.5 font-mono text-code-sm tabular text-on-surface-variant">
+                                {document.chunkCount}
+                              </td>
+                              <td className="px-3 py-2.5">
+                                <Badge tone={statusTone(document.processingStatus)}>
+                                  {statusLabel(document.processingStatus)}
+                                </Badge>
+                              </td>
+                              <td className="px-3 py-2.5 font-mono text-[11px] text-outline">
+                                {relativeTime(document.createdAt)}
+                              </td>
+                            </tr>
+                          );
+                        })
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+                <Pagination page={page} pageSize={pageSize} total={filtered.length} onPage={setPage} label="documents" />
+              </Panel>
+            </div>
+
+            <div className="min-w-0 xl:col-span-4">
+              <div className="sticky top-[72px]">
+                {selectedId ? (
+                  <div className="panel overflow-hidden">
+                    <div className="flex items-start justify-between gap-2 border-b border-line bg-surface-low px-md py-2.5">
+                      <div className="min-w-0">
+                        <div className="eyebrow">Document inspector</div>
+                        <div className="mt-0.5 truncate font-label-lg text-label-lg font-semibold text-on-surface">
+                          {detail?.filename ?? documents.find((document) => document.id === selectedId)?.filename ?? 'Loading…'}
+                        </div>
+                      </div>
+                      <CopyButton value={selectedId} label="ID" />
+                    </div>
+
+                    <div className="space-y-3 p-md">
+                      {detailLoading && !detail ? (
+                        <div className="flex items-center gap-2 py-4 font-body text-body-sm text-outline">
+                          <Icon name="sync" size={16} className="animate-spin" /> Loading document detail…
+                        </div>
+                      ) : detailError ? (
+                        <InlineError message={detailError} onRetry={() => setSelectedId(selectedId)} />
+                      ) : detail ? (
+                        <>
+                          <div className="flex flex-wrap items-center gap-1.5">
+                            <Badge tone={statusTone(detail.processingStatus)}>{statusLabel(detail.processingStatus)}</Badge>
+                            <Badge tone="primary">{fileType(detail.filename)}</Badge>
+                            <span className="font-mono text-label-sm text-outline">
+                              {detail.chunkCount} chunks
+                            </span>
+                          </div>
+
+                          {detail.processingError ? (
+                            <div className="rounded border border-critical-line bg-critical-surface px-2.5 py-2 font-mono text-[11px] text-critical-ink">
+                              {detail.processingError}
+                            </div>
+                          ) : null}
+
+                          <dl className="grid grid-cols-2 gap-x-3 gap-y-2 border-y border-line py-2">
+                            {[
+                              ['Created', formatDateTime(detail.createdAt)],
+                              ['Processed', detail.processedAt ? formatDateTime(detail.processedAt) : '—'],
+                              ['Document ID', shortId(detail.id, 12)],
+                              ['Visibility', 'Organization'],
+                            ].map(([label, value]) => (
+                              <div key={label}>
+                                <dt className="mono-label text-outline">{label}</dt>
+                                <dd className="mt-0.5 break-words font-mono text-[11px] text-on-surface">{value}</dd>
+                              </div>
+                            ))}
+                          </dl>
+
+                          <div className="flex flex-wrap gap-1.5">
+                            <Button
+                              size="sm"
+                              variant="ai"
+                              icon="neurology"
+                              onClick={() =>
+                                navigate(
+                                  `/copilot?q=${encodeURIComponent(
+                                    `Summarize the operational guidance in the document "${detail.filename}" and when an on-call engineer should use it.`
+                                  )}`
+                                )
+                              }
+                            >
+                              Ask Copilot
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="secondary"
+                              icon="search"
+                              onClick={() => navigate(`/search?q=${encodeURIComponent(detail.filename)}`)}
+                            >
+                              Test retrieval
+                            </Button>
+                          </div>
+
+                          <div className="border-t border-line pt-2">
+                            <div className="mb-1.5 flex items-center justify-between">
+                              <span className="mono-label text-outline">
+                                Indexed chunks {detail.chunkCount > detail.chunks.length ? `(first ${detail.chunks.length})` : ''}
+                              </span>
+                              <span className="font-mono text-[10px] text-outline">cosine index</span>
+                            </div>
+                            {detail.chunks.length === 0 ? (
+                              <p className="font-body text-body-sm text-outline">
+                                No chunks are stored yet. If the document is still processing, this panel
+                                refreshes automatically; if it failed, the error above explains why.
+                              </p>
+                            ) : (
+                              <div className="max-h-[360px] space-y-1.5 overflow-y-auto pr-1">
+                                {detail.chunks.map((chunk) => (
+                                  <div key={chunk.id} className="rounded border border-outline-variant bg-surface-low p-2">
+                                    <div className="mb-1 flex items-center justify-between font-mono text-[10px] uppercase tracking-wider text-outline">
+                                      <span>Chunk #{chunk.chunkIndex}</span>
+                                      <span>
+                                        {typeof chunk.metadata?.tokenCount === 'number'
+                                          ? `${chunk.metadata.tokenCount} tok`
+                                          : ''}
+                                      </span>
+                                    </div>
+                                    <p className="line-clamp-3 font-mono text-[11px] leading-relaxed text-on-surface-variant">
+                                      {chunk.preview}
+                                    </p>
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+
+                          <p className="border-t border-line pt-2 font-body text-[11px] leading-relaxed text-outline">
+                            The API exposes document detail and chunk previews. Re-index, delete and
+                            document-mutation endpoints are not implemented.
+                          </p>
+                        </>
+                      ) : (
+                        <EmptyState compact icon="description" title="Document not found" />
+                      )}
+                    </div>
+                  </div>
+                ) : (
+                  <Panel title="Document inspector" icon="frame_inspect">
+                    <EmptyState
+                      compact
+                      icon="touch_app"
+                      title="Select a document"
+                      description="Inspect ingestion status, processing errors and the chunks that were embedded for retrieval."
+                    />
+                  </Panel>
+                )}
+              </div>
             </div>
           </div>
-        </div>
-
-        {/* Document Table */}
-        <div className="bg-surface-container-low border border-outline-variant/15 rounded-2xl overflow-hidden shadow-xl">
-          <div className="overflow-x-auto w-full custom-scrollbar">
-            <table className="w-full text-left border-collapse min-w-[800px]">
-              <thead>
-                <tr className="border-b border-outline-variant/15 bg-surface-container">
-                  <th className="p-4 font-label-caps text-label-caps text-on-surface-variant/70 tracking-wider uppercase">Document Name</th>
-                  <th className="p-4 font-label-caps text-label-caps text-on-surface-variant/70 tracking-wider uppercase w-28">Type</th>
-                  <th className="p-4 font-label-caps text-label-caps text-on-surface-variant/70 tracking-wider uppercase w-36">Status</th>
-                  <th className="p-4 font-label-caps text-label-caps text-on-surface-variant/70 tracking-wider uppercase hidden lg:table-cell">Uploaded By</th>
-                  <th className="p-4 font-label-caps text-label-caps text-on-surface-variant/70 tracking-wider uppercase hidden sm:table-cell w-40">Date Ingested</th>
-                </tr>
-              </thead>
-              <tbody className="font-code-md text-code-md divide-y divide-outline-variant/5">
-                {loading ? (
-                  <tr>
-                    <td colSpan={5} className="p-8 text-center text-on-surface-variant/60 font-body-sm">
-                      Loading documents...
-                    </td>
-                  </tr>
-                ) : filteredDocuments.length === 0 ? (
-                  <tr>
-                    <td colSpan={5} className="p-8 text-center text-on-surface-variant/60 font-body-sm">
-                      No operational documents found.
-                    </td>
-                  </tr>
-                ) : (
-                  filteredDocuments.map((doc) => (
-                    <tr key={doc.id} className="zebra-row table-row-hover group transition-colors">
-                      <td className="p-4 flex items-center gap-3">
-                        <div className={`w-8 h-8 rounded-lg flex items-center justify-center shrink-0 ${
-                          doc.status === 'Failed' ? 'bg-error/10 text-error' : 'bg-primary/10 text-primary border border-primary/10'
-                        }`}>
-                          <span className="material-symbols-outlined text-[18px]">{doc.icon}</span>
-                        </div>
-                        <span className="text-on-surface font-semibold truncate max-w-[200px] md:max-w-xs">{doc.name}</span>
-                      </td>
-                      <td className="p-4">
-                        <span className="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-bold bg-surface-container border border-outline-variant/20 text-on-surface-variant">
-                          {doc.type}
-                        </span>
-                      </td>
-                      <td className="p-4">
-                        {doc.status === 'Ready' && (
-                          <div className="flex items-center gap-1.5 text-primary">
-                            <span className="relative inline-flex rounded-full h-2 w-2 bg-primary shadow-[0_0_8px_#c0c1ff]"></span>
-                            <span className="font-body-sm text-body-sm font-semibold">Indexed</span>
-                          </div>
-                        )}
-                        {doc.status === 'Processing' && (
-                          <div className="flex items-center gap-1.5 text-[#facc15]">
-                            <span className="material-symbols-outlined text-[14px] animate-spin">sync</span>
-                            <span className="font-body-sm text-body-sm font-semibold">Processing...</span>
-                          </div>
-                        )}
-                        {doc.status === 'Failed' && (
-                          <div className="flex items-center gap-1.5 text-error">
-                            <span className="material-symbols-outlined text-[14px]">error</span>
-                            <span className="font-body-sm text-body-sm font-semibold">Failed</span>
-                          </div>
-                        )}
-                      </td>
-                      <td className="p-4 text-on-surface-variant/80 hidden lg:table-cell font-body-sm">
-                        {doc.uploadedBy}
-                      </td>
-                      <td className="p-4 text-on-surface-variant/60 hidden sm:table-cell font-body-sm font-medium">
-                        {doc.uploadedAt}
-                      </td>
-                    </tr>
-                  ))
-                )}
-              </tbody>
-            </table>
-          </div>
-
-          <div className="bg-surface-container/60 p-4 flex justify-between items-center font-body-sm text-body-sm text-on-surface-variant border-t border-outline-variant/15">
-            <span className="font-medium">Showing {filteredDocuments.length} of {documents.length} operational papers</span>
-          </div>
-        </div>
-      </div>
+        </>
+      )}
     </div>
   );
 }
