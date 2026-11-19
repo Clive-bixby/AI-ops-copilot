@@ -30,6 +30,10 @@ type OllamaHealthResponse = {
   status?: string;
 };
 
+type OllamaTagsResponse = {
+  models?: { name?: string; model?: string }[];
+};
+
 // ---------------------------------------------------------------------------
 // Custom Errors
 // ---------------------------------------------------------------------------
@@ -226,12 +230,24 @@ export async function checkOllamaHealth(): Promise<{
   try {
     await axios.get<OllamaHealthResponse>(OLLAMA_URL, { timeout: 5_000 });
 
-    // Verify the model is available by generating a tiny test embedding
-    await axios.post(
-      `${OLLAMA_URL}/api/embeddings`,
-      { model: EMBEDDING_MODEL, prompt: "health check" },
-      { timeout: 120_000 } // Cold start: model may need to load into memory
-    );
+    // Readiness check: confirm the configured model is installed without
+    // generating an embedding, which can take minutes on a cold model load.
+    const tags = await axios.get<OllamaTagsResponse>(`${OLLAMA_URL}/api/tags`, {
+      timeout: 5_000,
+    });
+    const installed = (tags.data.models ?? []).some((entry) => {
+      const name = entry.name ?? entry.model ?? "";
+      return name === EMBEDDING_MODEL || name.startsWith(`${EMBEDDING_MODEL}:`);
+    });
+
+    if (!installed) {
+      return {
+        healthy: false,
+        ollamaUrl: OLLAMA_URL,
+        model: EMBEDDING_MODEL,
+        message: `Model '${EMBEDDING_MODEL}' is not installed. Run: ollama pull ${EMBEDDING_MODEL}`,
+      };
+    }
 
     return {
       healthy: true,
