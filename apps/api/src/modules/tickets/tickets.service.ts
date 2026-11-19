@@ -22,64 +22,42 @@ export async function ingestTickets(organizationId: string, payload: unknown) {
 
   const normalizedTickets = parseRawTickets(payload);
 
-  const client = await pool.connect();
-  try {
-    await client.query("BEGIN");
+  // One multi-row INSERT for the whole batch (see logs.service.ts).
+  const values: unknown[] = [];
+  const placeholders: string[] = [];
 
-    const storedTickets: Array<{
-      id: string;
-      organizationId: string;
-      title: string;
-      description: string;
-      status: string;
-      priority: string;
-      createdAt: string;
-    }> = [];
+  normalizedTickets.forEach((ticket, index) => {
+    const base = index * 5;
+    values.push(
+      orgId,
+      ticket.title,
+      ticket.description,
+      ticket.status,
+      ticket.priority
+    );
+    placeholders.push(
+      `($${base + 1}, $${base + 2}, $${base + 3}, $${base + 4}, $${base + 5})`
+    );
+  });
 
-    for (const ticket of normalizedTickets) {
-      const result = await client.query<StoredTicketRow>(
-        `
-        INSERT INTO tickets (organization_id, title, description, status, priority)
-        VALUES ($1, $2, $3, $4, $5)
-        RETURNING id, organization_id, title, description, status, priority, created_at
-        `,
-        [
-          orgId,
-          ticket.title,
-          ticket.description,
-          ticket.status,
-          ticket.priority,
-        ]
-      );
+  const result = await pool.query<StoredTicketRow>(
+    `
+    INSERT INTO tickets (organization_id, title, description, status, priority)
+    VALUES ${placeholders.join(", ")}
+    RETURNING id, organization_id, title, description, status, priority, created_at
+    `,
+    values
+  );
 
-      const storedTicket = result.rows[0];
-      if (!storedTicket) {
-        throw new Error("Failed to store ticket");
-      }
-
-      storedTickets.push({
-        id: storedTicket.id,
-        organizationId: storedTicket.organization_id,
-        title: storedTicket.title,
-        description: storedTicket.description || "",
-        status: storedTicket.status,
-        priority: storedTicket.priority,
-        createdAt: storedTicket.created_at,
-      });
-    }
-
-    await client.query("COMMIT");
-    return storedTickets;
-  } catch (error) {
-    try {
-      await client.query("ROLLBACK");
-    } catch {
-      // Ignore rollback failures and throw original error below.
-    }
-    throw error;
-  } finally {
-    client.release();
-  }
+  return result.rows.map((row) => ({
+    id: row.id,
+    organizationId: row.organization_id,
+    title: row.title,
+    description: row.description || "",
+    status: row.status,
+    priority: row.priority,
+    createdAt: row.created_at,
+  }));
 }
 
 export async function listTickets(organizationId: string) {
@@ -93,4 +71,3 @@ export async function listTickets(organizationId: string) {
   );
   return result.rows;
 }
-
