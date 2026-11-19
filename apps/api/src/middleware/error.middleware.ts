@@ -1,28 +1,65 @@
 import type { ErrorRequestHandler } from "express";
-import type { HttpError } from "../utils/httpError.js";
 
-const ERROR_STATUS_BY_NAME: Record<string, number> = {
-  AuthValidationError: 400,
-  AuthConflictError: 409,
-  AuthUnauthorizedError: 401,
-  AuthConfigError: 500,
-  LogsValidationError: 400,
-  LogParseError: 400,
-  DocumentsValidationError: 400,
-  TicketsValidationError: 400,
-  TicketParseError: 400,
-  EmbeddingValidationError: 400,
-  EmbeddingConnectionError: 502,
-  EmbeddingModelError: 503,
-  DocumentParserError: 400,
-  DocumentProcessingError: 500,
-  UnsupportedFileTypeError: 400,
-  VectorValidationError: 400,
-  RetrievalValidationError: 400,
-  RAGValidationError: 400,
-  RAGProviderTimeoutError: 504,
-  RAGProviderError: 502,
-};
+import type { HttpError } from "../utils/httpError.js";
+import { UnsupportedFileTypeError } from "./upload.middleware.js";
+import {
+  AuthConfigError,
+  AuthConflictError,
+  AuthUnauthorizedError,
+  AuthValidationError,
+} from "../modules/auth/auth.service.js";
+import { DocumentsValidationError } from "../modules/documents/documents.service.js";
+import { LogParseError } from "../modules/logs/log.parser.js";
+import { LogsValidationError } from "../modules/logs/logs.service.js";
+import { TicketParseError } from "../modules/tickets/ticket.parser.js";
+import { TicketsValidationError } from "../modules/tickets/tickets.service.js";
+import { DocumentParserError } from "../modules/ai/documentParser.service.js";
+import { DocumentProcessingError } from "../modules/ai/documentProcessing.service.js";
+import {
+  EmbeddingConnectionError,
+  EmbeddingModelError,
+  EmbeddingValidationError,
+} from "../modules/ai/embedding.service.js";
+import {
+  RAGProviderError,
+  RAGProviderTimeoutError,
+  RAGValidationError,
+} from "../modules/ai/rag.service.js";
+import { RetrievalValidationError } from "../modules/ai/retrieval.service.js";
+import { VectorValidationError } from "../modules/ai/vector.service.js";
+
+type ErrorClass = new (...args: any[]) => Error;
+
+/**
+ * Mapping from error type to HTTP status.
+ *
+ * This used to key on `error.name`, which silently produced 500 for every class
+ * that never set a name (all auth, logs, tickets and documents errors), so a
+ * wrong password answered 500 instead of 401. `instanceof` cannot drift like
+ * that, and renaming or reorganising a class is caught by the compiler.
+ */
+const STATUS_RULES: ReadonlyArray<readonly [ErrorClass, number]> = [
+  [AuthValidationError, 400],
+  [AuthConflictError, 409],
+  [AuthUnauthorizedError, 401],
+  [AuthConfigError, 500],
+  [LogsValidationError, 400],
+  [LogParseError, 400],
+  [DocumentsValidationError, 400],
+  [UnsupportedFileTypeError, 400],
+  [TicketsValidationError, 400],
+  [TicketParseError, 400],
+  [EmbeddingValidationError, 400],
+  [EmbeddingConnectionError, 502],
+  [EmbeddingModelError, 503],
+  [DocumentParserError, 400],
+  [DocumentProcessingError, 500],
+  [VectorValidationError, 400],
+  [RetrievalValidationError, 400],
+  [RAGValidationError, 400],
+  [RAGProviderTimeoutError, 504],
+  [RAGProviderError, 502],
+];
 
 function resolveStatus(error: HttpError): number {
   if (typeof error.statusCode === "number") {
@@ -33,8 +70,13 @@ function resolveStatus(error: HttpError): number {
     return error.status;
   }
 
-  const mapped = ERROR_STATUS_BY_NAME[error.name];
-  return mapped ?? 500;
+  for (const [ErrorType, status] of STATUS_RULES) {
+    if (error instanceof ErrorType) {
+      return status;
+    }
+  }
+
+  return 500;
 }
 
 export const errorMiddleware: ErrorRequestHandler = (
