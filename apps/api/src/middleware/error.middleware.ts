@@ -16,6 +16,7 @@ const ERROR_STATUS_BY_NAME: Record<string, number> = {
   EmbeddingModelError: 503,
   DocumentParserError: 400,
   DocumentProcessingError: 500,
+  UnsupportedFileTypeError: 400,
   VectorValidationError: 400,
   RetrievalValidationError: 400,
   RAGValidationError: 400,

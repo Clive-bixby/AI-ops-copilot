@@ -4,7 +4,11 @@ import multer from "multer";
 
 import { authMiddleware } from "../../middleware/auth.middleware.js";
 import { orgMiddleware } from "../../middleware/org.middleware.js";
-import { upload } from "../../middleware/upload.middleware.js";
+import {
+  MAX_UPLOAD_BYTES,
+  UnsupportedFileTypeError,
+  upload,
+} from "../../middleware/upload.middleware.js";
 import {
   createDocumentController,
   getDocumentController,
@@ -19,7 +23,23 @@ function uploadSingleFile(req: Request, res: Response, next: NextFunction) {
       return next();
     }
 
+    if (error instanceof UnsupportedFileTypeError) {
+      return res.status(400).json({ error: error.message });
+    }
+
     if (error instanceof multer.MulterError) {
+      if (error.code === "LIMIT_FILE_SIZE") {
+        return res.status(413).json({
+          error: `File is too large. Maximum size is ${MAX_UPLOAD_BYTES / 1024 / 1024} MB.`,
+        });
+      }
+
+      if (error.code === "LIMIT_FILE_COUNT") {
+        return res
+          .status(400)
+          .json({ error: "Only one file can be uploaded per request." });
+      }
+
       if (error.code === "MISSING_FIELD_NAME") {
         return res.status(400).json({
           error:

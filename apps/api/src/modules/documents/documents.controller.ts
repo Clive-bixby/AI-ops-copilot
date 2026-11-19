@@ -1,11 +1,28 @@
 import { asyncHandler } from "../../utils/asyncHandler.js";
 import { createHttpError } from "../../utils/httpError.js";
-import { processDocument } from "../ai/documentProcessing.service.js";
+import {
+  processDocument,
+  removeUploadedFile,
+} from "../ai/documentProcessing.service.js";
 import {
   createDocument,
   getDocumentDetail,
   listDocuments,
 } from "./documents.service.js";
+
+/**
+ * Errors that mean "the file was stored but could not be turned into knowledge".
+ * They are reported as 422 with the real reason. Anything else is a server
+ * fault and is passed to the error middleware.
+ */
+const PROCESSING_FAILURE_ERROR_NAMES = new Set([
+  "DocumentParserError",
+  "DocumentProcessingError",
+  "EmbeddingValidationError",
+  "EmbeddingConnectionError",
+  "EmbeddingModelError",
+  "VectorValidationError",
+]);
 
 export const createDocumentController = asyncHandler(async (req, res) => {
   const organizationId = req.organizationId;
@@ -25,21 +42,54 @@ export const createDocumentController = asyncHandler(async (req, res) => {
     storedAs: file.filename,
   });
 
-  const document = await createDocument({
-    organizationId,
-    filename: file.originalname || file.filename,
-  });
+  let document: Awaited<ReturnType<typeof createDocument>>;
 
-  const processing = await processDocument(
-    document.id,
-    file.path,
-    organizationId
-  );
+  try {
+    document = await createDocument({
+      organizationId,
+      filename: file.originalname || file.filename,
+    });
+  } catch (error) {
+    // The upload is on disk but no document row will ever process it.
+    await removeUploadedFile(file.path);
+    throw error;
+  }
 
-  return res.status(201).json({
-    ...document,
-    processing,
-  });
+  try {
+    const processing = await processDocument(
+      document.id,
+      file.path,
+      organizationId
+    );
+
+    return res.status(201).json({
+      ...document,
+      processing,
+    });
+  } catch (error) {
+    const name = error instanceof Error ? error.name : "";
+
+    if (!PROCESSING_FAILURE_ERROR_NAMES.has(name)) {
+      throw error;
+    }
+
+    // The document row exists and is marked failed. Say so instead of
+    // returning 201 for work that did not happen.
+    const message =
+      error instanceof Error ? error.message : "Document processing failed";
+
+    return res.status(422).json({
+      error: `Document processing failed: ${message}`,
+      documentId: document.id,
+      filename: document.filename,
+      createdAt: document.createdAt,
+      processing: {
+        status: "failed",
+        totalChunks: 0,
+        error: message,
+      },
+    });
+  }
 });
 
 export const listDocumentsController = asyncHandler(async (req, res) => {

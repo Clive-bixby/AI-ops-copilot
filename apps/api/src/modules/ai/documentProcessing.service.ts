@@ -1,3 +1,5 @@
+import fs from "fs/promises";
+
 import { chunkText } from "./chunk.service.js";
 import { generateEmbeddings } from "./embedding.service.js";
 import { parseDocument } from "./documentParser.service.js";
@@ -26,6 +28,31 @@ function wait(ms: number): Promise<void> {
   return new Promise((resolve) => {
     setTimeout(resolve, ms);
   });
+}
+
+/**
+ * Delete an uploaded original. Originals are only needed until their text has
+ * been extracted; keeping them forever leaks disk space and retains user data
+ * the system no longer needs.
+ */
+export async function removeUploadedFile(filePath: string): Promise<void> {
+  const target = (filePath || "").trim();
+  if (!target) {
+    return;
+  }
+
+  try {
+    await fs.unlink(target);
+  } catch (error) {
+    const code =
+      error && typeof error === "object" && "code" in error
+        ? String((error as { code?: unknown }).code)
+        : "";
+
+    if (code !== "ENOENT") {
+      console.warn("Failed to delete uploaded file", { filePath: target, error });
+    }
+  }
 }
 
 async function generateEmbeddingsWithRetry(texts: string[]) {
@@ -72,6 +99,13 @@ async function markDocumentFailedSafely(
   }
 }
 
+/**
+ * Parse, chunk and embed an uploaded document.
+ *
+ * Failures are recorded on the document row and then rethrown so the caller can
+ * report them. They are never converted into a success result. The uploaded
+ * original is always deleted, whether processing succeeded or not.
+ */
 export async function processDocument(
   documentId: string,
   filePath: string,
@@ -135,6 +169,7 @@ export async function processDocument(
   } catch (error) {
     const message =
       error instanceof Error ? error.message : "Document processing failed";
+
     console.error("Document processing failed", {
       documentId,
       organizationId,
@@ -143,6 +178,8 @@ export async function processDocument(
 
     await markDocumentFailedSafely(documentId, organizationId, message);
 
-    return { status: "failed", totalChunks: 0, error: message };
+    throw error;
+  } finally {
+    await removeUploadedFile(filePath);
   }
 }
