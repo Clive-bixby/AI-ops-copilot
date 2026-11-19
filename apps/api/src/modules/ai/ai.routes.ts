@@ -1,5 +1,6 @@
 import { Router } from "express";
 
+import { devOnlyMiddleware } from "../../middleware/devOnly.middleware.js";
 import { authMiddleware } from "../../middleware/auth.middleware.js";
 import { orgMiddleware } from "../../middleware/org.middleware.js";
 import {
@@ -17,22 +18,44 @@ const aiRouter = Router();
 // Health check — no auth required (useful for monitoring)
 aiRouter.get("/health", aiHealthController);
 
-// Test endpoint — no auth for Day 1 development; lock down in production
-aiRouter.post("/test-embedding", testEmbeddingController);
+// Test endpoints are development tools. They require auth and an organization,
+// and they answer 404 unless ENABLE_DEV_ENDPOINTS=true.
+aiRouter.post(
+  "/test-embedding",
+  devOnlyMiddleware,
+  authMiddleware,
+  orgMiddleware,
+  testEmbeddingController
+);
 
-// Test endpoint — Day 2 chunking verification; lock down in production
-aiRouter.post("/test-chunk", testChunkController);
+aiRouter.post(
+  "/test-chunk",
+  devOnlyMiddleware,
+  authMiddleware,
+  orgMiddleware,
+  testChunkController
+);
+
+aiRouter.post(
+  "/test-index",
+  devOnlyMiddleware,
+  authMiddleware,
+  orgMiddleware,
+  testIndexController
+);
+
+aiRouter.post(
+  "/test-search",
+  devOnlyMiddleware,
+  authMiddleware,
+  orgMiddleware,
+  testSearchController
+);
 
 // Production semantic search, scoped to the active organization
 aiRouter.post("/search", authMiddleware, orgMiddleware, searchController);
 
 // Production RAG question answering, scoped to the active organization
 aiRouter.post("/ask", authMiddleware, orgMiddleware, askQuestion);
-
-// Test endpoint for Day 3 vector indexing, scoped to the active org
-aiRouter.post("/test-index", authMiddleware, orgMiddleware, testIndexController);
-
-// Test endpoint for Day 3 vector similarity search, scoped to the active org
-aiRouter.post("/test-search", authMiddleware, orgMiddleware, testSearchController);
 
 export default aiRouter;

@@ -32,7 +32,7 @@ const MATRIX: { capability: string; route: string; owner: boolean; admin: boolea
   { capability: 'Upload and index documents', route: 'POST /documents/upload', owner: true, admin: true, member: true },
   { capability: 'Semantic search and RAG answers', route: 'POST /ai/search, /ai/ask', owner: true, admin: true, member: true },
   { capability: 'Organization member directory', route: 'GET /admin/members', owner: true, admin: true, member: false },
-  { capability: 'Admin access check', route: 'GET /admin-test', owner: true, admin: true, member: false },
+  { capability: 'Admin access check', route: 'GET /admin/admin-test', owner: true, admin: true, member: false },
   { capability: 'Invite / remove members', route: 'not implemented', owner: false, admin: false, member: false },
   { capability: 'Change member roles', route: 'not implemented', owner: false, admin: false, member: false },
 ];

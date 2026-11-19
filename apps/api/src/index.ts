@@ -1,11 +1,15 @@
 import express from "express";
 import type { Request, Response } from "express";
 import cors from "cors";
+import helmet from "helmet";
 
 import { pool } from "./core/db.js";
+import { JSON_BODY_LIMIT, resolveAllowedOrigins } from "./config/security.js";
 import authRouter from "./modules/auth/auth.routes.js";
 import { authMiddleware } from "./middleware/auth.middleware.js";
 import { errorMiddleware } from "./middleware/error.middleware.js";
+import { notFoundMiddleware } from "./middleware/notFound.middleware.js";
+import { apiRateLimiter } from "./middleware/rateLimit.middleware.js";
 import adminRouter from "./modules/admin/admin.routes.js";
 import documentsRouter from "./modules/documents/documents.routes.js";
 import logsRouter from "./modules/logs/logs.routes.js";
@@ -15,6 +19,7 @@ import insightsRouter from "./modules/insights/insights.routes.js";
 
 const app = express();
 const PORT = Number(process.env.PORT || 3000);
+const allowedOrigins = resolveAllowedOrigins();
 
 type DependencyCheck = {
   status: "up" | "down";
@@ -70,8 +75,32 @@ async function checkDatabase(): Promise<DependencyCheck> {
   }
 }
 
-app.use(cors());
-app.use(express.json());
+// Behind a reverse proxy the client IP lives in X-Forwarded-For; without this,
+// rate limiting would key every client on the proxy address.
+const trustProxy = process.env.TRUST_PROXY?.trim();
+if (trustProxy) {
+  app.set("trust proxy", trustProxy);
+}
+
+app.disable("x-powered-by");
+app.use(helmet());
+app.use(
+  cors({
+    origin(
+      origin: string | undefined,
+      callback: (error: Error | null, allow?: boolean) => void
+    ) {
+      // No Origin header: curl, server-to-server, same-origin navigation.
+      if (!origin) {
+        return callback(null, true);
+      }
+
+      return callback(null, allowedOrigins.includes(origin));
+    },
+  })
+);
+app.use(express.json({ limit: JSON_BODY_LIMIT }));
+app.use(apiRateLimiter);
 
 app.get("/", (req: Request, res: Response) => {
   res.json({
@@ -111,16 +140,22 @@ app.use("/logs", logsRouter);
 app.use("/tickets", ticketsRouter);
 app.use("/ai", aiRouter);
 app.use("/insights", insightsRouter);
-app.use(adminRouter);
-app.use(errorMiddleware);
 
 app.get("/protected", authMiddleware, (req, res) => {
-  res.json({ message: "You are authenticated" })
-})
+  res.json({ message: "You are authenticated" });
+});
+
+// Order matters: unknown routes get a JSON 404, and the error handler is last so
+// it can catch failures from every route above it.
+app.use(notFoundMiddleware);
+app.use(errorMiddleware);
 
 app.listen(PORT, () => {
   console.log(`Server is running on http://localhost:${PORT}`);
   console.log(`Health check available at http://localhost:${PORT}/health`);
+  console.log(
+    `Allowed CORS origins: ${allowedOrigins.length > 0 ? allowedOrigins.join(", ") : "(none - same-origin only)"}`
+  );
 });
 
 process.on("SIGTERM", () => {

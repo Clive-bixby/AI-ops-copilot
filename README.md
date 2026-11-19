@@ -130,9 +130,16 @@ apps/web/src
 ```
 
 ## Security
-- Secrets via environment variables
-- JWT auth with org-scoped RBAC
-- Uploads and runtime data gitignored
+- Secrets via environment variables; uploads and runtime data gitignored
+- JWT auth with org-scoped RBAC; tenant id always derived from verified membership
+- `helmet` security headers and `x-powered-by` disabled
+- CORS is an explicit allowlist (`CORS_ORIGINS`); production defaults to no
+  cross-origin browser access
+- Per-IP rate limits: `RATE_LIMIT_MAX` per minute, stricter `AUTH_RATE_LIMIT_MAX`
+  per 15 minutes on login/register
+- JSON bodies capped by `JSON_BODY_LIMIT` (default 1 MB)
+- `/ai/test-*` development routes answer 404 unless `ENABLE_DEV_ENDPOINTS=true`
+- Uploads capped at 10 MB and restricted to parseable document types
 
 ## Author
 Built by Aryan Yadav — [GitHub](https://github.com/Clive-bixby)
