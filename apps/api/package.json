@@ -7,7 +7,11 @@
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
     "dev": "tsx watch src/index.ts",
-    "worker": "tsx src/workers/ingestion.worker.ts"
+    "start": "tsx src/index.ts",
+    "worker": "tsx src/workers/ingestion.worker.ts",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "db:migrate": "tsx src/scripts/migrate.ts",
+    "db:baseline": "tsx src/scripts/migrate.ts --baseline"
   },
   "keywords": [],
   "author": "",
@@ -30,6 +34,7 @@
   "devDependencies": {
     "@types/express": "^5.0.6",
     "@types/multer": "^2.1.0",
+    "@types/node": "^24.12.3",
     "@types/pg": "^8.18.0",
     "nodemon": "^3.1.11",
     "ts-node": "^10.9.2",
