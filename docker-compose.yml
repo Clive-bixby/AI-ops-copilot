@@ -1,35 +1,105 @@
-version: "3.9"
+name: opspilot
+
+# Local development stack. Every value can be overridden from a root .env file
+# (see .env.example); the defaults are for local use only and are not secrets.
+
 services:
   db:
     image: pgvector/pgvector:pg16
     environment:
-      POSTGRES_USER: aiops
-      POSTGRES_PASSWORD: aiops
-      POSTGRES_DB: aiops
+      POSTGRES_USER: ${POSTGRES_USER:-aiops}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-aiops}
+      POSTGRES_DB: ${POSTGRES_DB:-aiops}
     ports:
-      - "5432:5432"
+      # Host port is overridable so this stack can coexist with another local
+      # Postgres (POSTGRES_PORT=55432 docker compose up).
+      - "${POSTGRES_PORT:-5432}:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U ${POSTGRES_USER:-aiops} -d ${POSTGRES_DB:-aiops}",
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+
   redis:
     image: redis:7
     ports:
-      - "6379:6379"
-  api:
-    build: ./apps/api
-    ports:
-      - "3000:3000"
+      - "${REDIS_PORT:-6379}:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+  # One-shot migration job. The API only starts once this exits successfully,
+  # so a fresh volume is always migrated before any request is served.
+  migrate:
+    build:
+      context: ./apps/api
+    command: ["npm", "run", "db:migrate"]
     environment:
-      DATABASE_URL: postgres://aiops:aiops@db:5432/aiops
+      DATABASE_URL: postgres://${POSTGRES_USER:-aiops}:${POSTGRES_PASSWORD:-aiops}@db:5432/${POSTGRES_DB:-aiops}
+      # The bundled Postgres does not terminate TLS.
+      DATABASE_SSL: "false"
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: "no"
+
+  api:
+    build:
+      context: ./apps/api
+    environment:
+      NODE_ENV: production
+      PORT: "3000"
+      DATABASE_URL: postgres://${POSTGRES_USER:-aiops}:${POSTGRES_PASSWORD:-aiops}@db:5432/${POSTGRES_DB:-aiops}
+      # The bundled Postgres does not terminate TLS.
+      DATABASE_SSL: "false"
       REDIS_URL: redis://redis:6379
-      JWT_SECRET: change-me
-    depends_on:
-      - db
-      - redis
-  web:
-    build: ./apps/web
+      # Local default only. Runbook: set JWT_SECRET in .env before sharing a
+      # deployment with anyone.
+      JWT_SECRET: ${JWT_SECRET:-change-me-in-production}
+      JWT_EXPIRES_IN: ${JWT_EXPIRES_IN:-7d}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-2.5-flash-lite}
+      # Ollama runs on the host, not in this stack.
+      OLLAMA_URL: ${OLLAMA_URL:-http://host.docker.internal:11434}
+      OLLAMA_EMBEDDING_MODEL: ${OLLAMA_EMBEDDING_MODEL:-nomic-embed-text}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     ports:
-      - "5173:5173"
+      - "${API_PORT:-3000}:3000"
+    volumes:
+      - uploads:/app/uploads
     depends_on:
-      - api
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  web:
+    build:
+      context: ./apps/web
+      args:
+        # Baked into the bundle at build time; must be reachable from the browser.
+        VITE_API_URL: ${VITE_API_URL:-http://localhost:3000}
+    ports:
+      - "${WEB_PORT:-4173}:4173"
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+
 volumes:
   pgdata:
+  uploads:
