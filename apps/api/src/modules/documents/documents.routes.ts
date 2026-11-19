@@ -4,11 +4,8 @@ import multer from "multer";
 
 import { authMiddleware } from "../../middleware/auth.middleware.js";
 import { orgMiddleware } from "../../middleware/org.middleware.js";
-import {
-  MAX_UPLOAD_BYTES,
-  UnsupportedFileTypeError,
-  upload,
-} from "../../middleware/upload.middleware.js";
+import { UnsupportedFileTypeError, upload } from "../../middleware/upload.middleware.js";
+import { MAX_DOCUMENT_BYTES } from "../../config/limits.js";
 import {
   createDocumentController,
   getDocumentController,
@@ -30,7 +27,7 @@ function uploadSingleFile(req: Request, res: Response, next: NextFunction) {
     if (error instanceof multer.MulterError) {
       if (error.code === "LIMIT_FILE_SIZE") {
         return res.status(413).json({
-          error: `File is too large. Maximum size is ${MAX_UPLOAD_BYTES / 1024 / 1024} MB.`,
+          error: `File is too large. Maximum size is ${MAX_DOCUMENT_BYTES / 1024 / 1024} MB.`,
         });
       }
 

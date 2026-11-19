@@ -1,9 +1,17 @@
 import { asyncHandler } from "../../utils/asyncHandler.js";
 import { createHttpError } from "../../utils/httpError.js";
+import { DocumentParserError } from "../ai/documentParser.service.js";
 import {
+  DocumentProcessingError,
   processDocument,
   removeUploadedFile,
 } from "../ai/documentProcessing.service.js";
+import {
+  EmbeddingConnectionError,
+  EmbeddingModelError,
+  EmbeddingValidationError,
+} from "../ai/embedding.service.js";
+import { VectorValidationError } from "../ai/vector.service.js";
 import {
   createDocument,
   getDocumentDetail,
@@ -15,14 +23,20 @@ import {
  * They are reported as 422 with the real reason. Anything else is a server
  * fault and is passed to the error middleware.
  */
-const PROCESSING_FAILURE_ERROR_NAMES = new Set([
-  "DocumentParserError",
-  "DocumentProcessingError",
-  "EmbeddingValidationError",
-  "EmbeddingConnectionError",
-  "EmbeddingModelError",
-  "VectorValidationError",
-]);
+const PROCESSING_FAILURE_ERRORS = [
+  DocumentParserError,
+  DocumentProcessingError,
+  EmbeddingValidationError,
+  EmbeddingConnectionError,
+  EmbeddingModelError,
+  VectorValidationError,
+] as const;
+
+function isProcessingFailure(error: unknown): boolean {
+  return PROCESSING_FAILURE_ERRORS.some(
+    (ErrorType) => error instanceof ErrorType
+  );
+}
 
 export const createDocumentController = asyncHandler(async (req, res) => {
   const organizationId = req.organizationId;
@@ -67,9 +81,7 @@ export const createDocumentController = asyncHandler(async (req, res) => {
       processing,
     });
   } catch (error) {
-    const name = error instanceof Error ? error.name : "";
-
-    if (!PROCESSING_FAILURE_ERROR_NAMES.has(name)) {
+    if (!isProcessingFailure(error)) {
       throw error;
     }
 

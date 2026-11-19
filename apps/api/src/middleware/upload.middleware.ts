@@ -3,14 +3,13 @@ import multer from "multer";
 import path from "path";
 import { fileURLToPath } from "url";
 
+import { MAX_DOCUMENT_BYTES } from "../config/limits.js";
+
 const currentFilePath = fileURLToPath(import.meta.url);
 const currentDirPath = path.dirname(currentFilePath);
 const uploadDir = path.resolve(currentDirPath, "../../uploads");
 
 fs.mkdirSync(uploadDir, { recursive: true });
-
-/** Kept in sync with MAX_DOCUMENT_BYTES in documentParser.service.ts. */
-export const MAX_UPLOAD_BYTES = 10 * 1024 * 1024;
 
 /** Formats the parser can extract text from. Everything else is rejected here. */
 export const ALLOWED_UPLOAD_EXTENSIONS = [
@@ -45,7 +44,7 @@ const storage = multer.diskStorage({
 export const upload = multer({
   storage,
   limits: {
-    fileSize: MAX_UPLOAD_BYTES,
+    fileSize: MAX_DOCUMENT_BYTES,
     files: 1,
     fields: 10,
   },

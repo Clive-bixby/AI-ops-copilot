@@ -3,7 +3,7 @@ import path from "path";
 
 import { PDFParse } from "pdf-parse";
 
-const MAX_DOCUMENT_BYTES = 10 * 1024 * 1024;
+import { MAX_DOCUMENT_BYTES } from "../../config/limits.js";
 
 export class DocumentParserError extends Error {
   constructor(message: string) {
