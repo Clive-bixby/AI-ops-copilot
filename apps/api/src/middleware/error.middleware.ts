@@ -1,5 +1,6 @@
 import type { ErrorRequestHandler } from "express";
 
+import { logger } from "../core/logger.js";
 import type { HttpError } from "../utils/httpError.js";
 import { UnsupportedFileTypeError } from "./upload.middleware.js";
 import {
@@ -90,7 +91,21 @@ export const errorMiddleware: ErrorRequestHandler = (
   const message =
     status >= 500 ? "Internal server error" : error.message || "Request failed";
 
-  console.error(`[${req.method} ${req.originalUrl}]`, error);
+  logger.error("request.error", {
+    requestId: req.id,
+    method: req.method,
+    path: req.originalUrl,
+    status,
+    errorName: error.name,
+    errorMessage: error.message,
+    stack: error.stack,
+    organizationId: req.organizationId,
+    userId: req.user?.id,
+  });
 
-  res.status(status).json({ error: message });
+  // The request id lets a user quote a 500 that can actually be found in logs.
+  res.status(status).json({
+    error: message,
+    ...(req.id ? { requestId: req.id } : {}),
+  });
 };

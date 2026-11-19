@@ -4,11 +4,13 @@ import cors from "cors";
 import helmet from "helmet";
 
 import { pool } from "./core/db.js";
+import { logger } from "./core/logger.js";
 import { JSON_BODY_LIMIT, resolveAllowedOrigins } from "./config/security.js";
 import authRouter from "./modules/auth/auth.routes.js";
 import { authMiddleware } from "./middleware/auth.middleware.js";
 import { errorMiddleware } from "./middleware/error.middleware.js";
 import { notFoundMiddleware } from "./middleware/notFound.middleware.js";
+import { requestLogMiddleware } from "./middleware/requestLog.middleware.js";
 import { apiRateLimiter } from "./middleware/rateLimit.middleware.js";
 import adminRouter from "./modules/admin/admin.routes.js";
 import documentsRouter from "./modules/documents/documents.routes.js";
@@ -65,7 +67,7 @@ async function checkDatabase(): Promise<DependencyCheck> {
     const message =
       error instanceof Error ? error.message : "Database check failed";
 
-    console.error("[health] database probe failed", error);
+    logger.error("health.database_probe_failed", { error });
 
     return {
       status: "down",
@@ -82,6 +84,7 @@ if (trustProxy) {
   app.set("trust proxy", trustProxy);
 }
 
+app.use(requestLogMiddleware);
 app.disable("x-powered-by");
 app.use(helmet());
 app.use(
@@ -151,19 +154,20 @@ app.use(notFoundMiddleware);
 app.use(errorMiddleware);
 
 app.listen(PORT, () => {
-  console.log(`Server is running on http://localhost:${PORT}`);
-  console.log(`Health check available at http://localhost:${PORT}/health`);
-  console.log(
-    `Allowed CORS origins: ${allowedOrigins.length > 0 ? allowedOrigins.join(", ") : "(none - same-origin only)"}`
-  );
+  logger.info("server.started", {
+    port: PORT,
+    healthPath: "/health",
+    allowedOrigins:
+      allowedOrigins.length > 0 ? allowedOrigins : "(none - same-origin only)",
+  });
 });
 
 process.on("SIGTERM", () => {
-  console.log("SIGTERM signal received: shutting down");
+  logger.info("server.stopping", { signal: "SIGTERM" });
   process.exit(0);
 });
 
 process.on("SIGINT", () => {
-  console.log("SIGINT signal received: shutting down");
+  logger.info("server.stopping", { signal: "SIGINT" });
   process.exit(0);
 });
