@@ -129,6 +129,41 @@ export async function register(input: RegisterInput): Promise<RegisterResult> {
   }
 }
 
+export type SessionContext = {
+  user: { id: string; email: string };
+  organization: { id: string; name: string };
+  role: string;
+};
+
+export async function getSessionContext(
+  userId: string,
+  organizationId: string,
+  role: string
+): Promise<SessionContext> {
+  const result = await pool.query<{
+    email: string;
+    organization_name: string;
+  }>(
+    `SELECT u.email, o.name AS organization_name
+     FROM users u
+     JOIN organizations o ON o.id = $2
+     WHERE u.id = $1
+     LIMIT 1`,
+    [userId, organizationId]
+  );
+
+  const row = result.rows[0];
+  if (!row) {
+    throw new AuthUnauthorizedError("Session context not found");
+  }
+
+  return {
+    user: { id: userId, email: row.email },
+    organization: { id: organizationId, name: row.organization_name },
+    role,
+  };
+}
+
 export async function login(input: LoginInput): Promise<LoginResult> {
   const email = (input.email || "").trim().toLowerCase();
   const password = input.password || "";
