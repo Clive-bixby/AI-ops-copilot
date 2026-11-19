@@ -3,6 +3,7 @@ import express from "express";
 import { authMiddleware } from "../../middleware/auth.middleware.js";
 import { orgMiddleware } from "../../middleware/org.middleware.js";
 import { requireRole } from "../../middleware/rbac.middleware.js";
+import { listMembersController } from "./admin.controller.js";
 
 const router = express.Router();
 
@@ -29,6 +30,16 @@ router.post(
   orgMiddleware,
   requireRole(["owner", "admin"]),
   adminTestHandler
+);
+
+// Organization membership directory. Read-only: invitations and role changes
+// are not part of the current backend contract.
+router.get(
+  "/members",
+  authMiddleware,
+  orgMiddleware,
+  requireRole(["owner", "admin"]),
+  listMembersController
 );
 
 export default router;
