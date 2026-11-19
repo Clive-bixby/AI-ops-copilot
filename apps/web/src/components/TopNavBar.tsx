@@ -1,77 +1,164 @@
-import { useLocation } from 'react-router-dom';
+import { useEffect, useRef, useState } from 'react';
+import { useLocation, useNavigate } from 'react-router-dom';
 import clsx from 'clsx';
+import { api, errorMessage } from '../lib/api';
+import { useApiData } from '../lib/hooks';
+import { useAuth } from '../lib/auth';
+import { initials, titleCase } from '../lib/format';
+import type { ApiHealth, SystemStatus } from '../lib/types';
+import { Icon } from './ui';
 
-interface TopNavBarProps {
-  onMenuClick: () => void;
+interface ShellStatus {
+  system: SystemStatus | null;
+  health: ApiHealth | null;
+  healthError: string | null;
 }
 
-export function TopNavBar({ onMenuClick }: TopNavBarProps) {
+export function TopNavBar({ onMenuClick }: { onMenuClick: () => void }) {
+  const navigate = useNavigate();
   const location = useLocation();
-  const isCopilot = location.pathname === '/copilot';
+  const { session, role, isAdmin } = useAuth();
+  const [command, setCommand] = useState('');
+  const inputRef = useRef<HTMLInputElement>(null);
 
-  const getPageTitle = () => {
-    switch (location.pathname) {
-      case '/': return 'Dashboard';
-      case '/copilot': return 'AI Copilot';
-      case '/documents': return 'Documents';
-      case '/logs': return 'Logs';
-      default: return 'AI Ops Copilot';
+  const { data } = useApiData<ShellStatus>(async () => {
+    const [system, health] = await Promise.all([
+      api.status().catch(() => null),
+      api.ai.health().catch((error: unknown) => ({
+        error: errorMessage(error),
+      })),
+    ]);
+
+    if (health && 'error' in health) {
+      return { system, health: null, healthError: health.error ?? 'Unavailable' };
     }
+
+    return { system, health: health as ApiHealth | null, healthError: null };
+  }, []);
+
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
+        event.preventDefault();
+        inputRef.current?.focus();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
+
+  const submit = (event: React.FormEvent) => {
+    event.preventDefault();
+    const value = command.trim();
+    if (!value) return;
+    navigate(`/search?q=${encodeURIComponent(value)}`);
+    setCommand('');
   };
 
+  const orgName = session?.organization.name ?? 'Organization';
+  const environment = data?.system?.environment ?? 'api';
+  const healthy = data?.health?.healthy === true;
+  const roleLabel = titleCase(role ?? 'member');
+
+  const pageLabel =
+    {
+      '/': 'Command Center',
+      '/copilot': 'AI Copilot',
+      '/logs': 'Logs Explorer',
+      '/tickets': 'Tickets & Incidents',
+      '/documents': 'Knowledge & Docs',
+      '/search': 'Semantic Search',
+      '/admin': 'Admin & Roles',
+      '/settings': 'Settings',
+    }[location.pathname] ?? 'OpsPilot';
+
   return (
-    <header className="flex justify-between items-center w-full px-4 md:px-8 h-16 bg-surface-container border-b border-outline-variant/20 z-30 shrink-0 sticky top-0 backdrop-blur-md bg-opacity-80">
-      <div className="flex items-center gap-md w-full max-w-xl">
-        {/* Mobile Menu Button */}
-        <button 
-          onClick={onMenuClick}
-          className="md:hidden p-1.5 rounded-lg text-on-surface-variant hover:text-on-surface hover:bg-surface-variant transition-all mr-2"
-        >
-          <span className="material-symbols-outlined text-[24px]">menu</span>
-        </button>
-        
-        {/* Page Title for Desktop */}
-        <div className="hidden md:block mr-6">
-          <span className="font-headline-lg text-headline-lg text-on-surface font-semibold tracking-tight">
-            {getPageTitle()}
-          </span>
-        </div>
+    <header className="sticky top-0 z-40 flex h-14 shrink-0 items-center gap-3 border-b border-outline-variant bg-surface px-3 sm:px-4 lg:px-6">
+      <button
+        onClick={onMenuClick}
+        className="rounded p-1.5 text-on-surface-variant transition-colors hover:bg-surface-low hover:text-on-surface md:hidden"
+        aria-label="Open navigation"
+      >
+        <Icon name="menu" size={22} />
+      </button>
 
-        {/* Search Bar */}
-        <div className={clsx("relative w-full max-w-md hidden sm:block", isCopilot && "sm:max-w-xs")}>
-          <span className="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-on-surface-variant/70 text-[18px]">
-            search
-          </span>
-          <input
-            className="w-full bg-surface border border-outline-variant/30 rounded-xl py-1.5 pl-10 pr-4 font-body-sm text-body-sm text-on-surface placeholder:text-on-surface-variant/50 focus:outline-none focus:border-primary/50 focus:ring-1 focus:ring-primary/20 transition-all"
-            placeholder={isCopilot ? "Search sources..." : "Search operational data..."}
-            type="text"
-          />
+      <div className="hidden min-w-0 items-center gap-2 lg:flex">
+        <div className="flex h-7 w-7 items-center justify-center rounded border border-outline-variant bg-surface-low text-on-surface-variant">
+          <Icon name="domain" size={15} />
         </div>
+        <div className="min-w-0">
+          <div className="max-w-[190px] truncate font-label-lg text-label-lg font-semibold text-on-surface">
+            {orgName}
+          </div>
+          <div className="font-mono text-[9px] uppercase tracking-[0.12em] text-outline">
+            {environment} · {roleLabel}
+          </div>
+        </div>
+        <span className="mx-1 hidden h-6 w-px bg-line xl:block" />
+        <span className="hidden font-body text-body-sm text-on-surface-variant xl:inline">{pageLabel}</span>
       </div>
-      
-      <div className="flex items-center gap-4">
-        {/* Environment status chip */}
-        <div className="hidden lg:flex items-center gap-2 bg-background border border-outline-variant/15 px-3 py-1.5 rounded-xl">
-          <span className="w-2 h-2 rounded-full bg-[#4ade80] animate-pulse"></span>
-          <span className="font-code-sm text-code-sm text-on-surface-variant/80">ENV: <span className="text-on-surface font-medium">prod-us-east-1</span></span>
+
+      <form onSubmit={submit} className="relative min-w-0 flex-1 lg:max-w-md">
+        <Icon
+          name="search"
+          size={17}
+          className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-outline"
+        />
+        <input
+          ref={inputRef}
+          value={command}
+          onChange={(event) => setCommand(event.target.value)}
+          placeholder="Quick command or search…"
+          aria-label="Quick command or search"
+          className="h-8 w-full rounded border border-outline-variant bg-surface-low pl-8 pr-14 font-body text-body-sm text-on-surface placeholder:text-outline focus:border-primary focus:bg-surface focus:outline-none"
+        />
+        <kbd className="pointer-events-none absolute right-2 top-1/2 hidden -translate-y-1/2 rounded border border-outline-variant bg-surface px-1.5 py-0.5 font-mono text-[9px] text-outline sm:block">
+          ⌘K
+        </kbd>
+      </form>
+
+      <div className="ml-auto flex items-center gap-2">
+        <div
+          className={clsx(
+            'hidden items-center gap-1.5 rounded border px-2 py-1.5 font-mono text-label-sm sm:flex',
+            healthy
+              ? 'border-success-line bg-success-surface text-success-ink'
+              : 'border-outline-variant bg-surface-low text-on-surface-variant'
+          )}
+          title={
+            healthy
+              ? `${data?.health?.model ?? 'Embedding model'} · ${data?.health?.ollamaUrl ?? ''}`
+              : data?.healthError ?? 'Embedding health check pending'
+          }
+        >
+          <span
+            className={clsx(
+              'h-1.5 w-1.5 rounded-full',
+              healthy ? 'animate-pulse bg-success' : 'bg-outline'
+            )}
+          />
+          <span className="hidden xl:inline">EMBEDDINGS:</span>
+          <span className="font-semibold">{healthy ? 'LIVE' : 'OFFLINE'}</span>
         </div>
 
-        <div className="flex items-center gap-2 text-on-surface-variant border-l border-outline-variant/10 pl-4">
-          <button className="p-2 hover:text-on-surface hover:bg-surface-variant/40 transition-all rounded-xl relative">
-            <span className="material-symbols-outlined text-[20px]">notifications</span>
-            <span className="absolute top-1.5 right-1.5 w-2 h-2 bg-primary rounded-full"></span>
-          </button>
-          
-          <button className="p-2 hover:text-on-surface hover:bg-surface-variant/40 transition-all rounded-xl hidden sm:block">
-            <span className="material-symbols-outlined text-[20px]">help</span>
-          </button>
-          
-          <button className="p-1.5 ml-1 hover:bg-surface-variant/40 transition-all rounded-xl flex items-center gap-2 border border-transparent hover:border-outline-variant/20">
-            <div className="w-7 h-7 rounded-lg bg-primary-fixed-dim/15 text-primary flex items-center justify-center font-bold text-xs uppercase border border-primary/20">
-              OP
-            </div>
-          </button>
+        <div className="hidden items-center gap-1.5 rounded border border-outline-variant bg-surface-low px-2 py-1.5 font-mono text-label-sm text-on-surface-variant md:flex">
+          <Icon name="deployed_code" size={13} className="text-outline" />
+          <span className="uppercase tracking-wider">{environment}</span>
+        </div>
+
+        <button
+          onClick={() => navigate('/copilot')}
+          className="hidden items-center gap-1.5 rounded bg-primary px-3 py-2 font-label-lg text-label-lg font-semibold text-on-primary transition-colors hover:bg-primary-container sm:flex"
+        >
+          <Icon name="neurology" size={16} />
+          Investigate
+        </button>
+
+        <div
+          className="flex h-8 w-8 items-center justify-center rounded border border-outline-variant bg-surface-low font-mono text-[11px] font-bold text-on-surface-variant"
+          title={`${session?.user.email ?? 'Signed in'} · ${roleLabel}${isAdmin ? ' · admin access' : ''}`}
+        >
+          {initials(session?.user.email)}
         </div>
       </div>
     </header>
