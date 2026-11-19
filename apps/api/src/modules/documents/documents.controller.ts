@@ -1,7 +1,11 @@
 import { asyncHandler } from "../../utils/asyncHandler.js";
 import { createHttpError } from "../../utils/httpError.js";
 import { processDocument } from "../ai/documentProcessing.service.js";
-import { createDocument, listDocuments } from "./documents.service.js";
+import {
+  createDocument,
+  getDocumentDetail,
+  listDocuments,
+} from "./documents.service.js";
 
 export const createDocumentController = asyncHandler(async (req, res) => {
   const organizationId = req.organizationId;
@@ -47,4 +51,23 @@ export const listDocumentsController = asyncHandler(async (req, res) => {
 
   const result = await listDocuments(organizationId);
   return res.status(200).json(result);
+});
+
+export const getDocumentController = asyncHandler(async (req, res) => {
+  const organizationId = req.organizationId;
+
+  if (!organizationId) {
+    throw createHttpError(400, "Organization ID is required");
+  }
+
+  const rawId = req.params.id;
+  const documentId = Array.isArray(rawId) ? rawId[0] ?? "" : rawId ?? "";
+
+  const document = await getDocumentDetail(organizationId, documentId);
+
+  if (!document) {
+    throw createHttpError(404, "Document not found");
+  }
+
+  return res.status(200).json(document);
 });

@@ -7,6 +7,7 @@ import { orgMiddleware } from "../../middleware/org.middleware.js";
 import { upload } from "../../middleware/upload.middleware.js";
 import {
   createDocumentController,
+  getDocumentController,
   listDocumentsController,
 } from "./documents.controller.js";
 
@@ -43,6 +44,12 @@ function uploadSingleFile(req: Request, res: Response, next: NextFunction) {
 }
 
 documentsRouter.get("/", authMiddleware, orgMiddleware, listDocumentsController);
+documentsRouter.get(
+  "/:id",
+  authMiddleware,
+  orgMiddleware,
+  getDocumentController
+);
 documentsRouter.post(
   "/upload",
   authMiddleware,

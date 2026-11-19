@@ -19,7 +19,19 @@ type DocumentRow = {
   processing_error?: string | null;
   processed_at?: string | null;
   created_at: string;
+  chunk_count?: number;
 };
+
+type DocumentChunkRow = {
+  id: string;
+  chunk_index: number;
+  content: string;
+  metadata: Record<string, unknown> | null;
+  created_at: string;
+};
+
+const UUID_REGEX =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export class DocumentsValidationError extends Error {}
 
@@ -67,15 +79,18 @@ export async function listDocuments(organizationId: string) {
   const result = await pool.query<DocumentRow>(
     `
     SELECT
-      id,
-      filename,
-      processing_status,
-      processing_error,
-      processed_at,
-      created_at
-    FROM documents
-    WHERE organization_id = $1
-    ORDER BY created_at DESC
+      d.id,
+      d.filename,
+      d.processing_status,
+      d.processing_error,
+      d.processed_at,
+      d.created_at,
+      COUNT(dc.id)::int AS chunk_count
+    FROM documents d
+    LEFT JOIN document_chunks dc ON dc.document_id = d.id
+    WHERE d.organization_id = $1
+    GROUP BY d.id
+    ORDER BY d.created_at DESC
     `,
     [orgId]
   );
@@ -87,7 +102,79 @@ export async function listDocuments(organizationId: string) {
     processingError: row.processing_error,
     processedAt: row.processed_at,
     createdAt: row.created_at,
+    chunkCount: Number(row.chunk_count ?? 0),
   }));
+}
+
+export async function getDocumentDetail(
+  organizationId: string,
+  documentId: string
+) {
+  const orgId = (organizationId || "").trim();
+  const docId = (documentId || "").trim();
+
+  if (!orgId) {
+    throw new DocumentsValidationError("Organization ID is required");
+  }
+
+  if (!docId || !UUID_REGEX.test(docId)) {
+    throw new DocumentsValidationError("A valid document ID is required");
+  }
+
+  const documentResult = await pool.query<DocumentRow>(
+    `SELECT
+       id,
+       filename,
+       processing_status,
+       processing_error,
+       processed_at,
+       created_at
+     FROM documents
+     WHERE id = $1 AND organization_id = $2`,
+    [docId, orgId]
+  );
+
+  const document = documentResult.rows[0];
+  if (!document) {
+    return null;
+  }
+
+  const [chunksResult, chunkCountResult] = await Promise.all([
+    pool.query<DocumentChunkRow>(
+      `SELECT id, chunk_index, content, metadata, created_at
+       FROM document_chunks
+       WHERE document_id = $1 AND organization_id = $2
+       ORDER BY chunk_index ASC
+       LIMIT 50`,
+      [docId, orgId]
+    ),
+    pool.query<{ total: number }>(
+      `SELECT COUNT(*)::int AS total
+       FROM document_chunks
+       WHERE document_id = $1 AND organization_id = $2`,
+      [docId, orgId]
+    ),
+  ]);
+
+  return {
+    id: document.id,
+    filename: document.filename,
+    processingStatus: document.processing_status,
+    processingError: document.processing_error,
+    processedAt: document.processed_at,
+    createdAt: document.created_at,
+    chunkCount: Number(chunkCountResult.rows[0]?.total ?? 0),
+    chunks: chunksResult.rows.map((chunk) => ({
+      id: chunk.id,
+      chunkIndex: chunk.chunk_index,
+      preview:
+        chunk.content.length > 400
+          ? `${chunk.content.slice(0, 400).trim()}...`
+          : chunk.content,
+      metadata: chunk.metadata,
+      createdAt: chunk.created_at,
+    })),
+  };
 }
 
 export async function updateDocumentContent(
