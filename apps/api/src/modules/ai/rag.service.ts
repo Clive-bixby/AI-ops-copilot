@@ -18,6 +18,11 @@ const MAX_QUESTION_LENGTH = 500;
 const NO_RELIABLE_CONTEXT_ANSWER = "No reliable operational context found.";
 const DEFAULT_GEMINI_MODEL = "gemini-2.5-flash-lite";
 const KEYWORD_FALLBACK_LIMIT = 5;
+// Keyword-only chunks carry no similarity score, so they cannot be ranked against
+// vector evidence and are only ever a rescue path. When they are the only
+// evidence available, keep the prompt small enough that model context is not
+// spent on a long tail of one-word coincidences.
+const MAX_KEYWORD_ONLY_PROMPT_CHUNKS = 2;
 const GEMINI_API_BASE_URL =
   process.env.GEMINI_API_BASE_URL || "https://generativelanguage.googleapis.com";
 
@@ -277,6 +282,27 @@ export function fromRetrievedChunk(chunk: CitationSource): ContextChunk {
     preview: chunk.preview,
     content: chunk.content,
   };
+}
+
+/**
+ * Choose the evidence that goes into the prompt.
+ *
+ * A keyword-only chunk shares no scored evidence with the vector arm, so once
+ * there is real vector or hybrid evidence in the result set the keyword-only
+ * entries are dropped: they were added by a permissive OR query and, at this
+ * point, can only dilute the context. Keyword-only evidence is used only when the
+ * vector arm found nothing at all, and then at most a couple of chunks.
+ */
+export function selectPromptChunks(chunks: CitationSource[]): CitationSource[] {
+  const vectorBacked = chunks.filter((chunk) => chunk.matchType !== "keyword");
+
+  if (vectorBacked.length > 0) {
+    return vectorBacked;
+  }
+
+  return chunks
+    .filter((chunk) => chunk.matchType === "keyword")
+    .slice(0, MAX_KEYWORD_ONLY_PROMPT_CHUNKS);
 }
 
 function toSource(chunk: ContextChunk): RAGSource {
@@ -629,10 +655,11 @@ export async function answerQuestion(
     minSimilarity,
   });
 
+  const promptChunks = selectPromptChunks(retrieval.chunks);
   const usedKeywordFallback = retrieval.chunks.length === 0;
   const candidates: ContextChunk[] = usedKeywordFallback
     ? await fetchKeywordMatches(trimmedQuestion, orgId)
-    : retrieval.chunks.map(fromRetrievedChunk);
+    : promptChunks.map(fromRetrievedChunk);
 
   const contextChunks = buildContextChunks(candidates);
 
@@ -640,6 +667,8 @@ export async function answerQuestion(
     organizationId: orgId,
     queryType,
     retrievedChunkCount: retrieval.metrics.retrievedChunkCount,
+    promptCandidateCount: promptChunks.length,
+    keywordOnlyDropped: retrieval.chunks.length - promptChunks.length,
     usedChunkCount: contextChunks.length,
     keywordFallbackUsed: usedKeywordFallback,
   });
