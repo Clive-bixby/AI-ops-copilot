@@ -14,7 +14,6 @@ import {
   Icon,
   PageHeader,
   Panel,
-  Progress,
 } from '../components/ui';
 
 interface SettingsData {
@@ -201,7 +200,7 @@ export function Settings() {
           </div>
 
           <aside className="flex min-w-0 flex-col gap-gutter lg:col-span-4">
-            <Panel title="Retrieval engine" icon="hub" meta="Live">
+            <Panel title="Retrieval engine" icon="hub" meta="On demand">
               <div className="space-y-2.5">
                 <div className="flex items-center justify-between gap-2">
                   <span className="font-body text-body-sm text-on-surface-variant">Embedding service</span>
@@ -218,9 +217,11 @@ export function Settings() {
                 <div>
                   <div className="mb-1 flex items-center justify-between font-mono text-label-sm text-outline">
                     <span>Health probe</span>
-                    <span>{data?.health?.healthy ? '100%' : '0%'}</span>
+                    <span>{data?.health?.healthy ? 'reachable' : 'failed'}</span>
                   </div>
-                  <Progress value={data?.health?.healthy ? 100 : 0} tone={data?.health?.healthy ? 'ok' : 'critical'} />
+                  <div className="font-body text-[11px] leading-relaxed text-outline">
+                    Checks that Ollama answers and the configured embedding model is installed. It does not run a retrieval.
+                  </div>
                 </div>
                 <div className="border-t border-line pt-2">
                   <div className="mono-label text-outline">Endpoint</div>

@@ -147,9 +147,7 @@ export function Copilot() {
               <Badge tone={confidenceTone(latestResponse.confidence)}>
                 {latestResponse.confidence} confidence
               </Badge>
-            ) : (
-              <Badge tone="ai">RAG ready</Badge>
-            )}
+            ) : null}
           </>
         }
         title="Copilot Workspace"

@@ -243,7 +243,7 @@ export function Logs() {
             </span>
           </>
         }
-        title="Live Event Stream"
+        title="Event Stream"
         description="Inspect, filter and export the log entries ingested for this organization. Structured metadata is preserved exactly as the ingestion parser stored it."
         actions={
           <>
@@ -387,7 +387,7 @@ export function Logs() {
 
           <div className="grid items-start gap-gutter-desktop xl:grid-cols-12">
             <div className="min-w-0 xl:col-span-8">
-              <Panel title="Live event stream" icon="terminal" flush>
+              <Panel title="Event stream" icon="terminal" flush>
                 <div className="overflow-x-auto">
                   <table className="w-full min-w-[640px] table-fixed text-left">
                     <thead>

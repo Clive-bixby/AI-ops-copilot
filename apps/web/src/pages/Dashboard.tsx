@@ -294,10 +294,10 @@ export function Dashboard() {
           value={data.health?.healthy ? 'Online' : 'Degraded'}
           icon="neurology"
           tone={data.health?.healthy ? 'ai' : 'default'}
-          hint={data.health?.healthy ? `${data.health.model} · embedding health verified` : 'Embedding health unavailable'}
+          hint={data.health?.healthy ? `${data.health.model} · model installed` : 'Embedding model unavailable'}
           badge={
             <Badge tone={data.health?.healthy ? 'ai' : 'warn'}>
-              {data.health?.healthy ? 'RAG ready' : 'check model'}
+              {data.health?.healthy ? 'embeddings online' : 'model missing'}
             </Badge>
           }
         />
@@ -441,7 +441,7 @@ export function Dashboard() {
           </article>
 
           <Panel
-            title="Live ingestion stream"
+            title="Recent ingestion"
             icon="receipt_long"
             meta={`${latestLogs.length} most recent`}
             flush
