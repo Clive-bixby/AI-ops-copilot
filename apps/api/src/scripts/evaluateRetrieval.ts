@@ -8,6 +8,7 @@ import { indexTicket } from "../modules/ingestion/ticketIngest.service.js";
 import {
   evaluationDocuments,
   evaluationLogs,
+  evaluationNoiseDocuments,
   evaluationQueries,
   evaluationTickets,
 } from "../evaluation/retrievalDataset.js";
@@ -21,6 +22,12 @@ import {
  *
  * Run: npm run eval:retrieval
  * Keep the corpus for inspection: npm run eval:retrieval -- --keep
+ * Small, noise-free corpus: npm run eval:retrieval -- --small
+ *
+ * By default the corpus includes distractor documents that share vocabulary with
+ * the labelled sources, which is where an OR keyword arm can add noise. The
+ * `keyword-only` columns count top-10 results that were found only by the
+ * keyword arm, and how many of those were not relevant.
  */
 
 const TOP_K = 10;
@@ -33,6 +40,8 @@ type ModeMetrics = {
   mrr: number;
   ndcg: number;
   latencyMs: number;
+  keywordOnly: number;
+  keywordOnlyIrrelevant: number;
 };
 
 type QueryReport = {
@@ -56,6 +65,8 @@ function emptyMetrics(): ModeMetrics {
     mrr: 0,
     ndcg: 0,
     latencyMs: 0,
+    keywordOnly: 0,
+    keywordOnlyIrrelevant: 0,
   };
 }
 
@@ -115,14 +126,17 @@ async function clearOrganization(organizationId: string): Promise<void> {
   await pool.query(`DELETE FROM logs WHERE organization_id = $1`, [organizationId]);
 }
 
-async function seedCorpus(organizationId: string): Promise<{
+async function seedCorpus(
+  organizationId: string,
+  documents: typeof evaluationDocuments
+): Promise<{
   sourceKey: (sourceType: string, sourceId: string) => string | null;
 }> {
   const documentIdByKey = new Map<string, string>();
   const ticketIdByKey = new Map<string, string>();
   const logIdByKey = new Map<string, string>();
 
-  for (const document of evaluationDocuments) {
+  for (const document of documents) {
     const inserted = await pool.query<{ id: string }>(
       `INSERT INTO documents (organization_id, filename, content, content_hash)
        VALUES ($1, $2, $3, $4) RETURNING id`,
@@ -241,17 +255,29 @@ async function runMode(input: {
 
     const rankedKeys: string[] = [];
     const matchTypes: Record<string, number> = {};
+    const matchTypeByKey = new Map<string, string>();
 
     for (const chunk of result.chunks) {
       matchTypes[chunk.matchType] = (matchTypes[chunk.matchType] ?? 0) + 1;
       const key = input.sourceKey(chunk.sourceType, chunk.sourceId);
       if (key && !rankedKeys.includes(key)) {
         rankedKeys.push(key);
+        matchTypeByKey.set(key, chunk.matchType);
       }
     }
 
     const metrics = evaluateRanking(rankedKeys, item.relevant);
     metrics.latencyMs = latencyMs;
+
+    for (const key of rankedKeys.slice(0, TOP_K)) {
+      if (matchTypeByKey.get(key) !== "keyword") {
+        continue;
+      }
+      metrics.keywordOnly += 1;
+      if (!item.relevant.includes(key)) {
+        metrics.keywordOnlyIrrelevant += 1;
+      }
+    }
     const firstRelevantRank = rankedKeys.findIndex((key) =>
       item.relevant.includes(key)
     );
@@ -287,6 +313,8 @@ function average(reports: QueryReport[], mode: RetrievalMode): ModeMetrics {
     aggregate.mrr += metrics.mrr;
     aggregate.ndcg += metrics.ndcg;
     aggregate.latencyMs += metrics.latencyMs;
+    aggregate.keywordOnly += metrics.keywordOnly;
+    aggregate.keywordOnlyIrrelevant += metrics.keywordOnlyIrrelevant;
   }
 
   for (const k of RANK_CUTOFFS) {
@@ -297,6 +325,8 @@ function average(reports: QueryReport[], mode: RetrievalMode): ModeMetrics {
   aggregate.mrr /= count;
   aggregate.ndcg /= count;
   aggregate.latencyMs /= count;
+  aggregate.keywordOnly /= count;
+  aggregate.keywordOnlyIrrelevant /= count;
 
   return aggregate;
 }
@@ -307,11 +337,15 @@ function format(value: number, digits = 4): string {
 
 async function main(): Promise<void> {
   const keep = process.argv.includes("--keep");
+  const small = process.argv.includes("--small");
+  const documents = small
+    ? evaluationDocuments
+    : [...evaluationDocuments, ...evaluationNoiseDocuments];
   const organizationId = await ensureOrganization();
 
   try {
     await clearOrganization(organizationId);
-    const map = await seedCorpus(organizationId);
+    const map = await seedCorpus(organizationId, documents);
 
     const vectorReports = await runMode({
       organizationId,
@@ -334,17 +368,19 @@ async function main(): Promise<void> {
 
     console.log("");
     console.log("Retrieval evaluation — vector-only baseline vs hybrid (RRF)");
-    console.log(`Corpus: ${evaluationDocuments.length} documents, ${evaluationTickets.length} tickets, ${evaluationLogs.length} log events (${evaluationQueries.length} queries)`);
+    console.log(`Corpus: ${documents.length} documents (${small ? 0 : evaluationNoiseDocuments.length} distractors), ${evaluationTickets.length} tickets, ${evaluationLogs.length} log events (${evaluationQueries.length} queries)`);
     console.log("");
-    console.log("| Mode | Recall@5 | Recall@10 | Precision@5 | Precision@10 | MRR@10 | nDCG@10 | Avg ms |");
-    console.log("| --- | --- | --- | --- | --- | --- | --- | --- |");
+    console.log("| Mode | Recall@5 | Recall@10 | Precision@5 | Precision@10 | MRR@10 | nDCG@10 | KW-only@10 | KW-only wrong@10 | Avg ms |");
+    console.log("| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |");
 
     for (const mode of modes) {
       const metrics = summary[mode];
       console.log(
         `| ${mode} | ${format(metrics.recall[5] ?? 0)} | ${format(metrics.recall[10] ?? 0)} | ` +
           `${format(metrics.precision[5] ?? 0)} | ${format(metrics.precision[10] ?? 0)} | ` +
-          `${format(metrics.mrr)} | ${format(metrics.ndcg)} | ${Math.round(metrics.latencyMs)} |`
+          `${format(metrics.mrr)} | ${format(metrics.ndcg)} | ` +
+          `${format(metrics.keywordOnly, 2)} | ${format(metrics.keywordOnlyIrrelevant, 2)} | ` +
+          `${Math.round(metrics.latencyMs)} |`
       );
     }
 
@@ -365,7 +401,8 @@ async function main(): Promise<void> {
     const payload = {
       generatedAt: new Date().toISOString(),
       corpus: {
-        documents: evaluationDocuments.length,
+        documents: documents.length,
+        noiseDocuments: small ? 0 : evaluationNoiseDocuments.length,
         tickets: evaluationTickets.length,
         logEvents: evaluationLogs.length,
         queries: evaluationQueries.length,

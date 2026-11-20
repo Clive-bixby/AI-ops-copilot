@@ -180,6 +180,146 @@ Recovery is complete when gateway latency is below three hundred milliseconds an
   },
 ];
 
+/**
+ * Distractor documents.
+ *
+ * These exist so the evaluation is not run on a corpus where every document is
+ * an answer. They deliberately share surface vocabulary with the real runbooks
+ * (pool, cache, certificate, settlement, rollback) without containing the
+ * operational answer, which is exactly the case where an OR-based keyword arm
+ * can add noise. `npm run eval:retrieval -- --small` runs without them.
+ */
+export const evaluationNoiseDocuments: EvaluationDocument[] = [
+  {
+    key: "n_sales_deck",
+    filename: "q3-revenue-review.md",
+    content: `Q3 revenue review
+
+Revenue grew eight percent quarter over quarter, driven by the analytics tier. Deployment velocity also increased, but the deck does not attribute churn to availability. The cache line in the appendix refers to a marketing budget line item, not to infrastructure caching. Several customers asked for larger uploads during the enterprise workshop; no commitment was made.`,
+  },
+  {
+    key: "n_k8s_nodepool",
+    filename: "kubernetes-node-pool-autoscaling.md",
+    content: `Kubernetes node pool autoscaling
+
+Each node pool has a minimum and maximum node count. The cluster autoscaler adds nodes when pods stay pending for more than two minutes and removes them after ten minutes of low utilisation. Set the maximum node count with headroom for rolling upgrades; a node pool at its maximum cannot schedule new pods during a drain.
+
+Node pool sizing is unrelated to database connection limits, although both are often tuned in the same pull request.`,
+  },
+  {
+    key: "n_onboarding",
+    filename: "engineering-onboarding-checklist.md",
+    content: `Engineering onboarding checklist
+
+Week one: laptop setup, repository access, and a walk through the deployment pipeline. New engineers shadow an on-call rotation but do not carry a pager. Read the rollback and escalation documents in the engineering handbook before your first production change. Ask your buddy for the dashboard links rather than bookmarking stale ones.`,
+  },
+  {
+    key: "n_marketing",
+    filename: "website-copy-brief.md",
+    content: `Website copy brief
+
+Hero headline options, pricing page wording, and the search box placeholder all need a copy review. The upload page microcopy should mention supported file types. Keep sentences short and avoid jargon such as cache, pool, or lag unless the sentence explains it.`,
+  },
+  {
+    key: "n_changelog",
+    filename: "release-notes-2026-11.md",
+    content: `Release notes 2026.11
+
+Added saved searches, a bulk upload dialog, and clearer empty states. checkout_v2 remains behind a feature flag for enterprise tenants. Fixed a layout bug in the invoice table. Internal tooling changes, including a pipeline rollback shortcut, are not customer visible.`,
+  },
+  {
+    key: "n_settlement_faq",
+    filename: "merchant-settlement-faq.md",
+    content: `Merchant settlement FAQ
+
+Settlements are paid out on a T+2 schedule. The settlement report lists gross volume, refunds, and fees in the account currency. Merchants with multiple currencies see one row per currency. If a payout looks wrong, contact support with the payout identifier rather than editing the ledger.`,
+  },
+  {
+    key: "n_interview",
+    filename: "interview-loop-guide.md",
+    content: `Interview loop guide
+
+The loop covers coding, systems design, and a behavioural interview. Interviewers should not ask candidates to debug a live incident or describe an on-call page they have never seen. Score independently before the debrief, and keep the written feedback specific.`,
+  },
+  {
+    key: "n_support_macros",
+    filename: "support-macro-library.md",
+    content: `Support macro library
+
+Greeting, refund request, and account deletion macros. The attachment macro explains accepted formats and the size guidance shown in the help centre. Agents should link the help article instead of pasting error text; customers often quote a status code without the surrounding context.`,
+  },
+  {
+    key: "n_password_policy",
+    filename: "password-and-mfa-policy.md",
+    content: `Password and MFA policy
+
+Passwords must be at least fourteen characters and are checked against a breach corpus. MFA is required for every employee account. Recovery codes are stored in the password manager, not in the repository. Report a suspected compromise to security immediately; do not attempt to rotate credentials yourself.`,
+  },
+  {
+    key: "n_vendor_renewal",
+    filename: "vendor-renewal-thread.md",
+    content: `Vendor renewal thread
+
+The CDN contract renews in March. Procurement asked for a three year term with a flat price. The vendor account manager mentioned that their certificate management add-on is now bundled, and that their renewal notice arrives thirty days before expiry. Legal wants the data processing addendum updated before signature.`,
+  },
+  {
+    key: "n_dashboard_catalogue",
+    filename: "dashboard-catalogue.md",
+    content: `Dashboard catalogue
+
+Service overview, error rate, latency percentiles, and saturation panels live in the platform folder. Each dashboard links its owning team and runbook. Panels that have not been viewed in ninety days are archived during the quarterly review.`,
+  },
+  {
+    key: "n_terraform_module",
+    filename: "terraform-module-readme.md",
+    content: `Terraform module README
+
+This module provisions the application subnet, security groups, and a read replica. Inputs include instance class, replica count, and backup window. The module does not manage database users or parameter groups; those are applied by the platform team through a separate pipeline.`,
+  },
+  {
+    key: "n_docs_style",
+    filename: "documentation-style-guide.md",
+    content: `Documentation style guide
+
+Write procedures in the imperative mood and number the steps. Every runbook needs an owner, a last reviewed date, and a rollback note. Do not paste terminal output that contains identifiers. Link to the escalation policy instead of restating it.`,
+  },
+  {
+    key: "n_sdk_pagination",
+    filename: "sdk-pagination-guide.md",
+    content: `SDK pagination guide
+
+List endpoints return a cursor and a page size. Pass the cursor back to fetch the next page. The client retries transient failures with exponential backoff and surfaces the retry delay to the caller. Pagination is stable while rows are not deleted mid-iteration.`,
+  },
+  {
+    key: "n_procurement",
+    filename: "procurement-policy.md",
+    content: `Procurement policy
+
+Purchases above ten thousand require two quotes and director approval. Recurring software must be reviewed annually. Hardware is ordered through the standard catalogue and shipped to the office; remote employees receive a stipend instead.`,
+  },
+  {
+    key: "n_travel",
+    filename: "travel-and-expense-policy.md",
+    content: `Travel and expense policy
+
+Book travel through the corporate tool. Economy fares for flights under six hours, premium economy for longer flights. Submit receipts within thirty days. Conference attendance needs a written summary shared with the team afterwards.`,
+  },
+  {
+    key: "n_api_changelog",
+    filename: "api-versioning-policy.md",
+    content: `API versioning policy
+
+Breaking changes ship in a new major version and the previous version is supported for twelve months. Deprecation notices are announced ninety days ahead in the developer newsletter. Clients should tolerate unknown response fields.`,
+  },
+  {
+    key: "n_office_access",
+    filename: "office-access-guide.md",
+    content: `Office access guide
+
+Badges are issued on the first day and deactivated on the last. Visitors sign in at reception and are escorted after hours. Meeting rooms can be booked from the calendar; the large room has a video wall and two whiteboards.`,
+  },
+];
+
 export const evaluationTickets: EvaluationTicket[] = [
   {
     key: "t_login",
@@ -366,5 +506,39 @@ export const evaluationQueries: EvaluationQuery[] = [
   {
     query: "settlement currency does not match the ledger",
     relevant: ["d_error_code"],
+  },
+  // Harder queries: the wording is shared with the distractor documents, so an
+  // OR keyword arm has to rank real runbooks above keyword-coincidence noise.
+  {
+    query: "max connections per instance before the pool is saturated",
+    relevant: ["d_pg_pool"],
+  },
+  {
+    query: "how do I roll back a bad deployment",
+    relevant: ["d_rollback"],
+  },
+  {
+    query: "cache hit ratio dropped while keys were evicted",
+    relevant: ["d_redis", "l_redis"],
+  },
+  {
+    query: "certificate renewal failed before expiry",
+    relevant: ["d_tls"],
+  },
+  {
+    query: "customers cannot upload attachments because of the body size limit",
+    relevant: ["t_upload"],
+  },
+  {
+    query: "settlement file rejected for a currency mismatch on replay",
+    relevant: ["d_error_code"],
+  },
+  {
+    query: "severity one paging and escalation timing",
+    relevant: ["d_oncall"],
+  },
+  {
+    query: "restore the cluster to a point in time without overwriting the primary",
+    relevant: ["d_backup"],
   },
 ];
