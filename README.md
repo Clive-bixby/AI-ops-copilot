@@ -27,7 +27,7 @@ infra: PostgreSQL (pgvector) + Redis + Docker Compose
 - **Document ingestion** (PDF/TXT/CSV/MD/JSON/LOG) with chunking + embeddings
 - **Log pipeline** — ingest, parse, filter
 - **Ticket pipeline** — ingest (JSON/CSV), triage, matrix view
-- **Semantic search** over indexed document chunks
+- **Hybrid retrieval** over documents, tickets and grouped logs — pgvector cosine fused with Postgres full-text by reciprocal rank fusion; `/ai/search` reports `matchType` (`vector` / `keyword` / `hybrid`), a cosine `similarity` (null when only keywords matched) and an RRF `score`
 - **Admin panel** with role-gated access
 - **Dockerized** services with health checks
 
@@ -36,9 +36,9 @@ infra: PostgreSQL (pgvector) + Redis + Docker Compose
 |---|---|
 | Frontend | React 19, Vite, Tailwind, React Router |
 | Backend | Node.js, Express 5, TypeScript |
-| AI | Gemini for generation, Ollama (`nomic-embed-text`) for embeddings, pgvector cosine search |
+| AI | Gemini for generation, Ollama (`nomic-embed-text`) for embeddings, pgvector cosine + Postgres full-text retrieval fused with RRF |
 | Data | PostgreSQL + pgvector |
-| Queue | Redis + BullMQ (dependency of the API; ingestion currently runs inline) |
+| Queue | Redis + BullMQ (ingestion jobs are queued and drained by the `worker` service) |
 | Auth | JWT, org scoping, RBAC |
 | DevOps | Docker, Docker Compose |
 
@@ -111,6 +111,39 @@ npm test               # node:test unit tests, no database needed
 
 `.github/workflows/ci.yml` runs the API typecheck and unit tests plus the web
 typecheck and production build on every push to `main` and every pull request.
+
+## Retrieval
+
+One index (`source_chunks`) holds every searchable source: document chunks, tickets and grouped log events. Two arms query it and are fused by reciprocal rank fusion (`k=60`):
+
+- **Vector arm** — cosine distance over pgvector, filtered to the embedding model and width recorded on each row, with a similarity floor (`AI_SEARCH_MIN_SIMILARITY`, default 0.65).
+- **Full-text arm** — Postgres `tsvector` with the `english` configuration. It ORs the query lexemes (so a question can add words the runbook does not use) and ranks with `ts_rank_cd`.
+
+`POST /ai/search`:
+
+```jsonc
+{
+  "query": "how do I roll back a bad deployment",
+  "limit": 5,                    // 1-10
+  "mode": "hybrid",              // "vector" reproduces the pre-fusion behaviour
+  "sourceTypes": ["document"]    // optional: "document" | "ticket" | "log"
+}
+```
+
+Each result carries `matchType`, `similarity` (null for keyword-only hits, never invented), the RRF `score`, the real `sourceType`/`sourceId` and a `preview`. Hybrid evidence keeps its cosine similarity while being labelled `hybrid`.
+
+A chunk the vector arm returned always keeps its keyword evidence. A chunk only the keyword arm found competes for three of ten result slots, ordered by how many distinct query lexemes it covers and then by `ts_rank_cd`, so the permissive OR query cannot pad the tail. `HYBRID_RRF_K` overrides the fusion constant.
+
+### Measuring retrieval quality
+
+```bash
+cd apps/api
+npm run eval:retrieval                 # noisy corpus (default)
+npm run eval:retrieval -- --small      # without the distractor documents
+npm run eval:retrieval -- --keep       # keep the seeded organization for inspection
+```
+
+The harness seeds a temporary organization through the production ingestion path, runs every labelled query in both modes, prints Recall@5/10, Precision@5/10, MRR@10, nDCG@10 and per-page counts of keyword-only results (and how many were irrelevant), then deletes the organization. It needs Postgres with pgvector and Ollama; the absolute numbers depend on the corpus and the embedding model, so compare modes within one run rather than against values copied from another machine.
 
 ## Environment
 - `apps/api/.env.example` — API, datastore, auth, Gemini and Ollama settings
