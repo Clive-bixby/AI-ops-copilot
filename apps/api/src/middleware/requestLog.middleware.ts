@@ -17,7 +17,7 @@ const SAFE_REQUEST_ID = /^[A-Za-z0-9._:-]{8,128}$/;
 /** Health checks run every few seconds; logging them buries real requests. */
 const SKIPPED_PATHS = new Set(["/health"]);
 
-function resolveRequestId(header: string | undefined): string {
+export function resolveRequestId(header: string | undefined): string {
   if (header && SAFE_REQUEST_ID.test(header)) {
     return header;
   }

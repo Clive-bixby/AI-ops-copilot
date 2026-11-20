@@ -106,7 +106,11 @@ cd apps/api
 npm run db:migrate     # apply pending migrations
 npm run db:baseline    # mark an existing database as migrated without running SQL
 npm run typecheck      # tsc --noEmit
+npm test               # node:test unit tests, no database needed
 ```
+
+`.github/workflows/ci.yml` runs the API typecheck and unit tests plus the web
+typecheck and production build on every push to `main` and every pull request.
 
 ## Environment
 - `apps/api/.env.example` — API, datastore, auth, Gemini and Ollama settings
