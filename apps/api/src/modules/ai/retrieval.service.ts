@@ -234,7 +234,7 @@ function buildPreview(content: string): string {
   return `${normalized.slice(0, DEFAULT_PREVIEW_LENGTH).trim()}...`;
 }
 
-type FusedCandidate = {
+export type FusedCandidate = {
   id: string;
   sourceType: VectorizableSourceType;
   sourceId: string;
@@ -253,7 +253,7 @@ type FusedCandidate = {
  * a ts_rank — which are on unrelated scales — can be combined without inventing
  * a calibration between them.
  */
-function fuseResults(input: {
+export function fuseResults(input: {
   vectorResults: SimilarityResult[];
   keywordResults: FullTextResult[];
   limit: number;
@@ -357,7 +357,7 @@ function compareCandidates(a: FusedCandidate, b: FusedCandidate): number {
   return a.chunkIndex - b.chunkIndex;
 }
 
-function toCitationSource(candidate: FusedCandidate): CitationSource {
+export function toCitationSource(candidate: FusedCandidate): CitationSource {
   const matchType: MatchType =
     candidate.vectorRank !== null && candidate.keywordRank !== null
       ? "hybrid"
