@@ -1,58 +1,66 @@
 import { toSql } from "pgvector";
-import type { PoolClient } from "pg";
 
 import { pool } from "../../core/db.js";
+import { getEmbeddingConfig } from "../ingestion/embeddingConfig.js";
 
-const EXPECTED_EMBEDDING_DIMENSIONS = 768;
+export type VectorizableSourceType = "document" | "log" | "ticket";
+
 const DEFAULT_SEARCH_LIMIT = 5;
-const MAX_SEARCH_LIMIT = 10;
+// The public API limit stays at 10; the candidate pool used before fusion is
+// larger so each arm has something to contribute to the merged ranking.
+const MAX_SEARCH_LIMIT = 50;
 
-export type VectorChunkInput = {
+export type FullTextResult = {
+  id: string;
+  sourceType: VectorizableSourceType;
+  sourceId: string;
+  documentId: string | null;
+  chunkIndex: number;
   content: string;
-  index?: number;
-  metadata?: Record<string, unknown>;
+  metadata: Record<string, unknown> | null;
+  createdAt: string;
+  sourceCreatedAt: string | null;
+  rank: number;
 };
 
-type DocumentChunkRow = {
+type FullTextRow = {
   id: string;
-  document_id: string;
-  organization_id: string;
+  source_type: VectorizableSourceType;
+  source_id: string;
   chunk_index: number;
   content: string;
   metadata: Record<string, unknown> | null;
   created_at: string;
+  source_created_at: string | null;
+  rank: string | number;
 };
 
 type SimilarityRow = {
   id: string;
-  document_id: string;
+  source_type: VectorizableSourceType;
+  source_id: string;
   chunk_index: number;
   content: string;
   metadata: Record<string, unknown> | null;
   distance: string | number;
   similarity: string | number;
   created_at: string;
-};
-
-export type StoredDocumentChunk = {
-  id: string;
-  documentId: string;
-  organizationId: string;
-  chunkIndex: number;
-  content: string;
-  metadata: Record<string, unknown> | null;
-  createdAt: string;
+  source_created_at: string | null;
 };
 
 export type SimilarityResult = {
   id: string;
-  documentId: string;
+  sourceType: VectorizableSourceType;
+  sourceId: string;
+  /** Convenience discriminator: only document results have a document id. */
+  documentId: string | null;
   chunkIndex: number;
   content: string;
   metadata: Record<string, unknown> | null;
   distance: number;
   similarity: number;
   createdAt: string;
+  sourceCreatedAt: string | null;
 };
 
 export class VectorValidationError extends Error {
@@ -76,9 +84,9 @@ function validateEmbedding(embedding: number[], label: string): void {
     throw new VectorValidationError(`${label} must be a non-empty number array`);
   }
 
-  if (embedding.length !== EXPECTED_EMBEDDING_DIMENSIONS) {
+  if (embedding.length !== getEmbeddingConfig().dimensions) {
     throw new VectorValidationError(
-      `${label} must have ${EXPECTED_EMBEDDING_DIMENSIONS} dimensions; received ${embedding.length}`
+      `${label} must have ${getEmbeddingConfig().dimensions} dimensions; received ${embedding.length}`
     );
   }
 
@@ -125,157 +133,36 @@ function normalizeSimilarityThreshold(minSimilarity?: number): number {
   return minSimilarity;
 }
 
-function rowToStoredChunk(row: DocumentChunkRow): StoredDocumentChunk {
-  return {
-    id: row.id,
-    documentId: row.document_id,
-    organizationId: row.organization_id,
-    chunkIndex: row.chunk_index,
-    content: row.content,
-    metadata: row.metadata,
-    createdAt: row.created_at,
-  };
-}
-
 function rowToSimilarityResult(row: SimilarityRow): SimilarityResult {
   return {
     id: row.id,
-    documentId: row.document_id,
+    sourceType: row.source_type,
+    sourceId: row.source_id,
+    documentId: row.source_type === "document" ? row.source_id : null,
     chunkIndex: row.chunk_index,
     content: row.content,
     metadata: row.metadata,
     distance: Number(row.distance),
     similarity: Number(row.similarity),
     createdAt: row.created_at,
+    sourceCreatedAt: row.source_created_at,
   };
 }
 
-async function executeInsertBatch(
-  client: PoolClient,
-  chunks: VectorChunkInput[],
-  embeddings: number[][],
-  documentId: string,
-  organizationId: string
-): Promise<StoredDocumentChunk[]> {
-  const values: unknown[] = [];
-  const placeholders: string[] = [];
-
-  chunks.forEach((chunk, index) => {
-    const embedding = embeddings[index];
-    if (!embedding) {
-      throw new VectorValidationError(`Missing embedding for chunk ${index}`);
-    }
-
-    validateEmbedding(embedding, `Embedding for chunk ${index}`);
-
-    const content = (chunk.content || "").trim();
-    if (!content) {
-      throw new VectorValidationError(`Chunk ${index} content is required`);
-    }
-
-    const chunkIndex = chunk.index ?? index;
-    if (!Number.isInteger(chunkIndex) || chunkIndex < 0) {
-      throw new VectorValidationError(`Chunk ${index} has an invalid index`);
-    }
-
-    const base = values.length;
-    values.push(
-      documentId,
-      organizationId,
-      chunkIndex,
-      content,
-      toSql(embedding),
-      chunk.metadata ? JSON.stringify(chunk.metadata) : null
-    );
-
-    placeholders.push(
-      `($${base + 1}, $${base + 2}, $${base + 3}, $${base + 4}, $${base + 5}::vector, $${base + 6}::jsonb)`
-    );
-  });
-
-  const result = await client.query<DocumentChunkRow>(
-    `
-    INSERT INTO document_chunks (
-      document_id,
-      organization_id,
-      chunk_index,
-      content,
-      embedding,
-      metadata
-    )
-    VALUES ${placeholders.join(", ")}
-    ON CONFLICT (document_id, chunk_index)
-    DO UPDATE SET
-      organization_id = EXCLUDED.organization_id,
-      content = EXCLUDED.content,
-      embedding = EXCLUDED.embedding,
-      metadata = EXCLUDED.metadata
-    RETURNING
-      id,
-      document_id,
-      organization_id,
-      chunk_index,
-      content,
-      metadata,
-      created_at
-    `,
-    values
-  );
-
-  return result.rows.map(rowToStoredChunk);
-}
-
-export async function insertChunks(
-  chunks: VectorChunkInput[],
-  embeddings: number[][],
-  documentId: string,
-  organizationId: string
-): Promise<StoredDocumentChunk[]> {
-  const docId = validateId(documentId, "Document ID");
-  const orgId = validateId(organizationId, "Organization ID");
-
-  if (!Array.isArray(chunks) || chunks.length === 0) {
-    throw new VectorValidationError("At least one chunk is required");
-  }
-
-  if (!Array.isArray(embeddings) || chunks.length !== embeddings.length) {
-    throw new VectorValidationError(
-      "Chunks and embeddings must have the same length"
-    );
-  }
-
-  const client = await pool.connect();
-
-  try {
-    await client.query("BEGIN");
-    const storedChunks = await executeInsertBatch(
-      client,
-      chunks,
-      embeddings,
-      docId,
-      orgId
-    );
-    await client.query("COMMIT");
-
-    return storedChunks;
-  } catch (error) {
-    try {
-      await client.query("ROLLBACK");
-    } catch (rollbackError) {
-      console.error("Failed to rollback vector insert transaction", rollbackError);
-    }
-
-    throw error;
-  } finally {
-    client.release();
-  }
-}
-
+/**
+ * Cosine search over the unified index.
+ *
+ * Only rows written with the currently configured model and width are compared:
+ * vectors from another embedding model are not comparable, and silently mixing
+ * them would produce confident-looking nonsense. Organization scoping is part of
+ * the query, never applied after the fact.
+ */
 export async function searchSimilar(
   queryEmbedding: number[],
   organizationId: string,
   limit?: number,
-  minSimilarity?: number
+  minSimilarity?: number,
+  options?: { sourceTypes?: VectorizableSourceType[] }
 ): Promise<SimilarityResult[]> {
   const orgId = validateId(organizationId, "Organization ID");
   const searchLimit = normalizeLimit(limit);
@@ -283,25 +170,118 @@ export async function searchSimilar(
   const maxDistance = 1 - similarityThreshold;
   validateEmbedding(queryEmbedding, "Query embedding");
 
+  const config = getEmbeddingConfig();
+  const sourceTypes =
+    options?.sourceTypes && options.sourceTypes.length > 0
+      ? options.sourceTypes
+      : null;
+
   const result = await pool.query<SimilarityRow>(
     `
     SELECT
       id,
-      document_id,
+      source_type,
+      source_id,
       chunk_index,
       content,
       metadata,
       embedding <=> $2::vector AS distance,
       1 - (embedding <=> $2::vector) AS similarity,
-      created_at
-    FROM document_chunks
+      created_at,
+      source_created_at
+    FROM source_chunks
     WHERE organization_id = $1
+      AND embedding_model = $5
+      AND embedding_dimensions = $6
       AND (embedding <=> $2::vector) <= $4
+      AND ($7::text[] IS NULL OR source_type = ANY($7::text[]))
     ORDER BY embedding <=> $2::vector
     LIMIT $3
     `,
-    [orgId, toSql(queryEmbedding), searchLimit, maxDistance]
+    [
+      orgId,
+      toSql(queryEmbedding),
+      searchLimit,
+      maxDistance,
+      config.model,
+      config.dimensions,
+      sourceTypes,
+    ]
   );
 
   return result.rows.map(rowToSimilarityResult);
+}
+
+/**
+ * Keyword arm: Postgres full-text search over the generated `tsv` column.
+ *
+ * The arm is recall-oriented. It ORs the lexemes produced by the `english`
+ * configuration instead of requiring every word to appear, because operational
+ * questions often add words the runbook does not use ("PGPOOL_MAX environment
+ * variable" against a document that only says "PGPOOL_MAX"). `ts_rank_cd`
+ * rewards chunks that cover more of the query, and the caller fuses the arm by
+ * rank rather than by raw score.
+ *
+ * Lexemes come from `to_tsvector`, and `quote_literal` keeps operator
+ * characters out of the tsquery. A query made only of stop words produces no
+ * lexemes and therefore no matches, which is the honest result rather than an
+ * error.
+ */
+export async function searchFullText(
+  query: string,
+  organizationId: string,
+  limit?: number,
+  options?: { sourceTypes?: VectorizableSourceType[] }
+): Promise<FullTextResult[]> {
+  const orgId = validateId(organizationId, "Organization ID");
+  const searchLimit = normalizeLimit(limit);
+  const trimmedQuery = (query || "").trim();
+
+  if (!trimmedQuery) {
+    throw new VectorValidationError("Query is required");
+  }
+
+  const sourceTypes =
+    options?.sourceTypes && options.sourceTypes.length > 0
+      ? options.sourceTypes
+      : null;
+
+  const result = await pool.query<FullTextRow>(
+    `
+    WITH search_query AS (
+      SELECT string_agg(quote_literal(lexeme), ' | ')::tsquery AS query
+      FROM unnest(tsvector_to_array(to_tsvector('english', $2))) AS lexeme
+    )
+    SELECT
+      sc.id,
+      sc.source_type,
+      sc.source_id,
+      sc.chunk_index,
+      sc.content,
+      sc.metadata,
+      sc.created_at,
+      sc.source_created_at,
+      ts_rank_cd(sc.tsv, search_query.query) AS rank
+    FROM source_chunks sc, search_query
+    WHERE sc.organization_id = $1
+      AND sc.tsv @@ search_query.query
+      AND ($3::text[] IS NULL OR sc.source_type = ANY($3::text[]))
+    ORDER BY rank DESC, sc.id
+    LIMIT $4
+    `,
+    [orgId, trimmedQuery, sourceTypes, searchLimit]
+  );
+
+  return result.rows.map((row) => ({
+    id: row.id,
+    sourceType: row.source_type,
+    sourceId: row.source_id,
+    documentId: row.source_type === "document" ? row.source_id : null,
+    chunkIndex: row.chunk_index,
+    content: row.content,
+    metadata: row.metadata,
+    createdAt: row.created_at,
+    sourceCreatedAt: row.source_created_at,
+    rank: Number(row.rank),
+  }));
 }

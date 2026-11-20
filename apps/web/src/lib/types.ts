@@ -80,10 +80,21 @@ export interface Ticket {
   created_at: string;
 }
 
+export type SearchSourceType = 'document' | 'log' | 'ticket';
+
+export type SearchMatchType = 'vector' | 'keyword' | 'hybrid';
+
 export interface SearchResult {
   content: string;
-  similarity: number;
-  documentId: string;
+  /** null when the chunk was found only by the keyword arm */
+  similarity: number | null;
+  /** Reciprocal-rank-fusion score; higher is better within one response */
+  score: number;
+  matchType: SearchMatchType;
+  sourceType: SearchSourceType;
+  sourceId: string;
+  /** null for log groups and tickets, which are not documents */
+  documentId: string | null;
   chunkIndex: number;
   preview: string;
 }
@@ -96,7 +107,7 @@ export interface SearchResponse {
 }
 
 export type RagSourceType = 'document' | 'log' | 'ticket';
-export type RagMatchType = 'vector' | 'keyword';
+export type RagMatchType = 'vector' | 'keyword' | 'hybrid';
 
 export interface RagSource {
   sourceType: RagSourceType;

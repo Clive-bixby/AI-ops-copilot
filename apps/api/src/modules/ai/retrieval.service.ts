@@ -1,6 +1,10 @@
 import { generateEmbedding } from "./embedding.service.js";
-import { searchSimilar } from "./vector.service.js";
-import type { SimilarityResult } from "./vector.service.js";
+import { searchFullText, searchSimilar } from "./vector.service.js";
+import type {
+  FullTextResult,
+  SimilarityResult,
+  VectorizableSourceType,
+} from "./vector.service.js";
 import { elapsedMs, logAIMetrics, nowMs } from "./aiMetrics.util.js";
 
 export const DEFAULT_RETRIEVAL_LIMIT = 5;
@@ -9,11 +13,24 @@ export const MIN_QUERY_LENGTH = 3;
 export const MAX_QUERY_LENGTH = 500;
 export const DEFAULT_MIN_SIMILARITY = 0.65;
 const DEFAULT_PREVIEW_LENGTH = 180;
+const DEFAULT_RRF_K = 60;
+const CANDIDATE_MULTIPLIER = 4;
+const MAX_CANDIDATE_LIMIT = 40;
+
+export type RetrievalMode = "hybrid" | "vector";
+export type MatchType = "vector" | "keyword" | "hybrid";
 
 export type SearchRelevantChunk = {
   content: string;
-  similarity: number;
-  documentId: string;
+  /** Cosine similarity, or null when the chunk was found only by keywords. */
+  similarity: number | null;
+  /** Fusion score (RRF). Higher is better; comparable within one response only. */
+  score: number;
+  matchType: MatchType;
+  sourceType: VectorizableSourceType;
+  sourceId: string;
+  /** Present only for document chunks. */
+  documentId: string | null;
   chunkIndex: number;
   preview: string;
 };
@@ -23,23 +40,26 @@ export type RetrievalOptions = {
   query: string;
   topK?: number;
   minSimilarity?: number;
-  sourceTypes?: ("document" | "log" | "ticket")[];
+  sourceTypes?: VectorizableSourceType[];
+  /** Defaults to hybrid; `vector` reproduces the pre-Phase-2 behaviour. */
+  mode?: RetrievalMode;
 };
 
 export type RetrievedContext = {
   content: string;
   sourceId: string;
-  sourceType: string;
-  similarity: number;
+  sourceType: VectorizableSourceType;
+  similarity: number | null;
 };
 
 export type CitationSource = {
-  /** Vector hits always come from indexed document chunks. */
-  sourceType: "document";
-  matchType: "vector";
-  documentId: string;
+  sourceType: VectorizableSourceType;
+  sourceId: string;
+  documentId: string | null;
+  matchType: MatchType;
   chunkIndex: number;
-  similarity: number;
+  similarity: number | null;
+  score: number;
   preview: string;
   content: string;
 };
@@ -100,6 +120,13 @@ function normalizeMinSimilarity(minSimilarity?: number): number {
   return Math.max(minSimilarity, DEFAULT_MIN_SIMILARITY);
 }
 
+function getRrfK(): number {
+  const rawValue = process.env.HYBRID_RRF_K;
+  const parsed = rawValue ? Number(rawValue) : DEFAULT_RRF_K;
+
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_RRF_K;
+}
+
 export function validateSearchQuery(query: unknown): string {
   if (typeof query !== "string") {
     throw new RetrievalValidationError("Query must be a string");
@@ -140,6 +167,46 @@ export function validateRetrievalLimit(limit?: unknown): number {
   return limit;
 }
 
+export function validateSourceTypes(value: unknown): VectorizableSourceType[] | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+
+  if (!Array.isArray(value)) {
+    throw new RetrievalValidationError("sourceTypes must be an array");
+  }
+
+  const allowed: VectorizableSourceType[] = ["document", "log", "ticket"];
+  const unique: VectorizableSourceType[] = [];
+
+  for (const entry of value) {
+    if (typeof entry !== "string" || !allowed.includes(entry as VectorizableSourceType)) {
+      throw new RetrievalValidationError(
+        `Unsupported source type '${String(entry)}'`
+      );
+    }
+
+    const sourceType = entry as VectorizableSourceType;
+    if (!unique.includes(sourceType)) {
+      unique.push(sourceType);
+    }
+  }
+
+  return unique;
+}
+
+export function validateRetrievalMode(value: unknown): RetrievalMode {
+  if (value === undefined) {
+    return "hybrid";
+  }
+
+  if (value === "hybrid" || value === "vector") {
+    return value;
+  }
+
+  throw new RetrievalValidationError("mode must be 'hybrid' or 'vector'");
+}
+
 function validateOrganizationId(organizationId: unknown): string {
   if (typeof organizationId !== "string" || organizationId.trim().length === 0) {
     throw new RetrievalValidationError("Organization ID is required");
@@ -167,82 +234,193 @@ function buildPreview(content: string): string {
   return `${normalized.slice(0, DEFAULT_PREVIEW_LENGTH).trim()}...`;
 }
 
-function dedupeChunks(chunks: SimilarityResult[]): SimilarityResult[] {
-  const seenSourceKeys = new Set<string>();
-  const seenFingerprints = new Set<string>();
-  const deduped: SimilarityResult[] = [];
+type FusedCandidate = {
+  id: string;
+  sourceType: VectorizableSourceType;
+  sourceId: string;
+  documentId: string | null;
+  chunkIndex: number;
+  content: string;
+  similarity: number | null;
+  vectorRank: number | null;
+  keywordRank: number | null;
+  score: number;
+};
 
-  for (const chunk of chunks) {
-    const sourceKey = `${chunk.documentId}:${chunk.chunkIndex}`;
-    const fingerprint = normalizeFingerprint(chunk.content);
+/**
+ * Reciprocal Rank Fusion: score = Σ 1 / (k + rank) over the arms that returned
+ * the chunk. RRF compares positions, not raw scores, so a cosine similarity and
+ * a ts_rank — which are on unrelated scales — can be combined without inventing
+ * a calibration between them.
+ */
+function fuseResults(input: {
+  vectorResults: SimilarityResult[];
+  keywordResults: FullTextResult[];
+  limit: number;
+  mode: RetrievalMode;
+}): FusedCandidate[] {
+  const k = getRrfK();
+  const byKey = new Map<string, FusedCandidate>();
 
-    if (seenSourceKeys.has(sourceKey) || seenFingerprints.has(fingerprint)) {
-      continue;
+  const upsert = (candidate: {
+    id: string;
+    sourceType: VectorizableSourceType;
+    sourceId: string;
+    documentId: string | null;
+    chunkIndex: number;
+    content: string;
+    similarity: number | null;
+    vectorRank: number | null;
+    keywordRank: number | null;
+  }) => {
+    const key = `${candidate.sourceType}:${candidate.sourceId}:${candidate.chunkIndex}`;
+    const existing = byKey.get(key);
+
+    const vectorScore =
+      candidate.vectorRank === null ? 0 : 1 / (k + candidate.vectorRank);
+    const keywordScore =
+      candidate.keywordRank === null ? 0 : 1 / (k + candidate.keywordRank);
+
+    if (!existing) {
+      byKey.set(key, {
+        ...candidate,
+        score: vectorScore + keywordScore,
+      });
+      return;
     }
 
-    seenSourceKeys.add(sourceKey);
+    existing.vectorRank = candidate.vectorRank ?? existing.vectorRank;
+    existing.keywordRank = candidate.keywordRank ?? existing.keywordRank;
+    existing.similarity = candidate.similarity ?? existing.similarity;
+    existing.score =
+      (existing.vectorRank === null ? 0 : 1 / (k + existing.vectorRank)) +
+      (existing.keywordRank === null ? 0 : 1 / (k + existing.keywordRank));
+  };
+
+  input.vectorResults.forEach((hit, index) => {
+    upsert({
+      id: hit.id,
+      sourceType: hit.sourceType,
+      sourceId: hit.sourceId,
+      documentId: hit.documentId,
+      chunkIndex: hit.chunkIndex,
+      content: hit.content,
+      similarity: hit.similarity,
+      vectorRank: index + 1,
+      keywordRank: null,
+    });
+  });
+
+  if (input.mode === "hybrid") {
+    input.keywordResults.forEach((hit, index) => {
+      upsert({
+        id: hit.id,
+        sourceType: hit.sourceType,
+        sourceId: hit.sourceId,
+        documentId: hit.documentId,
+        chunkIndex: hit.chunkIndex,
+        content: hit.content,
+        similarity: null,
+        vectorRank: null,
+        keywordRank: index + 1,
+      });
+    });
+  }
+
+  // Deduplicate near-identical text that different sources happen to contain;
+  // the first (highest-RRF) copy wins.
+  const seenFingerprints = new Set<string>();
+  const unique: FusedCandidate[] = [];
+
+  for (const candidate of [...byKey.values()].sort(compareCandidates)) {
+    const fingerprint = normalizeFingerprint(candidate.content);
+    if (seenFingerprints.has(fingerprint)) {
+      continue;
+    }
     seenFingerprints.add(fingerprint);
-    deduped.push(chunk);
+    unique.push(candidate);
   }
 
-  return deduped;
+  return unique.slice(0, input.limit);
 }
 
-function preserveDocumentOrderWhenUseful(
-  chunks: SimilarityResult[]
-): SimilarityResult[] {
-  const byDocument = new Map<string, SimilarityResult[]>();
-
-  for (const chunk of chunks) {
-    const existing = byDocument.get(chunk.documentId) ?? [];
-    existing.push(chunk);
-    byDocument.set(chunk.documentId, existing);
+function compareCandidates(a: FusedCandidate, b: FusedCandidate): number {
+  if (b.score !== a.score) {
+    return b.score - a.score;
   }
 
-  if (byDocument.size !== 1) {
-    return chunks;
+  const similarityDelta = (b.similarity ?? -1) - (a.similarity ?? -1);
+  if (similarityDelta !== 0) {
+    return similarityDelta;
   }
 
-  return [...chunks].sort((a, b) => a.chunkIndex - b.chunkIndex);
+  return a.chunkIndex - b.chunkIndex;
 }
 
-function toCitationSource(chunk: SimilarityResult): CitationSource {
+function toCitationSource(candidate: FusedCandidate): CitationSource {
+  const matchType: MatchType =
+    candidate.vectorRank !== null && candidate.keywordRank !== null
+      ? "hybrid"
+      : candidate.vectorRank !== null
+        ? "vector"
+        : "keyword";
+
   return {
-    sourceType: "document",
-    matchType: "vector",
-    documentId: chunk.documentId,
-    chunkIndex: chunk.chunkIndex,
-    similarity: chunk.similarity,
-    preview: buildPreview(chunk.content),
-    content: chunk.content,
+    sourceType: candidate.sourceType,
+    sourceId: candidate.sourceId,
+    documentId: candidate.documentId,
+    matchType,
+    chunkIndex: candidate.chunkIndex,
+    similarity:
+      candidate.similarity === null
+        ? null
+        : Number(candidate.similarity.toFixed(6)),
+    score: Number(candidate.score.toFixed(6)),
+    preview: buildPreview(candidate.content),
+    content: candidate.content,
   };
 }
 
 /**
- * Find the most relevant document chunks for a natural-language query.
- *
- * pgvector's cosine operator returns distance, where lower is better. The API
- * exposes similarity instead (`1 - distance`) so higher scores feel natural to
- * clients and are easier to threshold for RAG.
+ * Find the most relevant indexed chunks for a natural-language query.
  */
 export async function searchRelevantChunks(
   query: string,
   organizationId: string,
-  limit?: number
+  limit?: number,
+  options?: {
+    sourceTypes?: VectorizableSourceType[];
+    mode?: RetrievalMode;
+  }
 ): Promise<SearchRelevantChunk[]> {
-  const options: RetrievalOptions = {
+  const retrievalOptions: RetrievalOptions = {
     query,
     organizationId,
     minSimilarity: getConfiguredMinSimilarity(),
+    mode: options?.mode ?? "hybrid",
   };
 
   if (limit !== undefined) {
-    options.topK = limit;
+    retrievalOptions.topK = limit;
   }
 
-  const result = await retrieveRelevantChunks(options);
+  if (options?.sourceTypes !== undefined) {
+    retrievalOptions.sourceTypes = options.sourceTypes;
+  }
 
-  return result.chunks;
+  const result = await retrieveRelevantChunks(retrievalOptions);
+
+  return result.chunks.map((chunk) => ({
+    content: chunk.content,
+    similarity: chunk.similarity,
+    score: chunk.score,
+    matchType: chunk.matchType,
+    sourceType: chunk.sourceType,
+    sourceId: chunk.sourceId,
+    documentId: chunk.documentId,
+    chunkIndex: chunk.chunkIndex,
+    preview: chunk.preview,
+  }));
 }
 
 export async function retrieveRelevantChunks(
@@ -252,8 +430,16 @@ export async function retrieveRelevantChunks(
   const trimmedQuery = validateSearchQuery(options.query);
   const orgId = validateOrganizationId(options.organizationId);
   const searchLimit = validateRetrievalLimit(options.topK);
+  const mode = options.mode ?? "hybrid";
   const minSimilarity = normalizeMinSimilarity(options.minSimilarity);
-  const candidateLimit = Math.min(searchLimit * 2, MAX_RETRIEVAL_LIMIT);
+  const candidateLimit = Math.min(
+    searchLimit * CANDIDATE_MULTIPLIER,
+    MAX_CANDIDATE_LIMIT
+  );
+  const sourceFilters =
+    options.sourceTypes && options.sourceTypes.length > 0
+      ? { sourceTypes: options.sourceTypes }
+      : undefined;
 
   logAIMetrics("retrieval.started", {
     organizationId: orgId,
@@ -261,10 +447,19 @@ export async function retrieveRelevantChunks(
     topK: searchLimit,
     candidateLimit,
     minSimilarity,
+    mode,
+    sourceTypes: options.sourceTypes ?? "all",
   });
 
   const embeddingStartedAt = nowMs();
-  const embeddingResult = await generateEmbedding(trimmedQuery);
+
+  // The keyword arm does not need the embedding, so both start together.
+  const [embeddingResult, keywordResults] = await Promise.all([
+    generateEmbedding(trimmedQuery),
+    mode === "hybrid"
+      ? searchFullText(trimmedQuery, orgId, candidateLimit, sourceFilters)
+      : Promise.resolve([] as FullTextResult[]),
+  ]);
   const embeddingMs = elapsedMs(embeddingStartedAt);
 
   logAIMetrics("retrieval.embedding_generated", {
@@ -275,25 +470,29 @@ export async function retrieveRelevantChunks(
   });
 
   const vectorStartedAt = nowMs();
-  const rawResults = await searchSimilar(
+  const vectorResults = await searchSimilar(
     embeddingResult.embedding,
     orgId,
     candidateLimit,
-    minSimilarity
+    minSimilarity,
+    sourceFilters
   );
   const vectorSearchMs = elapsedMs(vectorStartedAt);
 
-  const rankedChunks = dedupeChunks(rawResults)
-    .sort((a, b) => b.similarity - a.similarity)
-    .slice(0, searchLimit);
-  const orderedChunks = preserveDocumentOrderWhenUseful(rankedChunks);
-  const chunks = orderedChunks.map(toCitationSource);
+  const fused = fuseResults({
+    vectorResults,
+    keywordResults,
+    limit: searchLimit,
+    mode,
+  });
+  const chunks = fused.map(toCitationSource);
   const retrievalMs = elapsedMs(startedAt) - embeddingMs;
 
   logAIMetrics("retrieval.completed", {
     organizationId: orgId,
-    rawCount: rawResults.length,
-    dedupedCount: chunks.length,
+    mode,
+    rawCount: vectorResults.length + keywordResults.length,
+    fusedCount: fused.length,
     embeddingMs,
     vectorSearchMs,
     retrievalMs,
@@ -304,14 +503,15 @@ export async function retrieveRelevantChunks(
     metrics: {
       embeddingMs,
       retrievalMs,
-      retrievedChunkCount: rawResults.length,
+      retrievedChunkCount: fused.length,
     },
   };
 }
 
 /**
- * RAG-compatible retrieval wrapper kept for the upcoming Day 6 generation
- * pipeline. Day 5 indexes document chunks only, so sourceType is fixed.
+ * RAG-compatible retrieval wrapper. Returns flat evidence records with their
+ * real source identity, so a log group or ticket is never reported as a
+ * document.
  */
 export async function retrieveContext(
   options: RetrievalOptions
@@ -320,8 +520,8 @@ export async function retrieveContext(
 
   return result.chunks.map((chunk) => ({
     content: chunk.content,
-    sourceId: chunk.documentId,
-    sourceType: "document",
+    sourceId: chunk.sourceId,
+    sourceType: chunk.sourceType,
     similarity: chunk.similarity,
   }));
 }

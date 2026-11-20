@@ -4,11 +4,15 @@ import { createDocument } from "../documents/documents.service.js";
 import { checkOllamaHealth, generateEmbedding } from "./embedding.service.js";
 import { chunkText, cleanText, estimateTokens } from "./chunk.service.js";
 import type { ChunkOptions } from "./chunk.service.js";
-import { insertChunks, searchSimilar } from "./vector.service.js";
+import { searchSimilar } from "./vector.service.js";
+import { getEmbeddingConfig, hashContent } from "../ingestion/embeddingConfig.js";
+import { replaceSourceIndex } from "../ingestion/sourceIndex.service.js";
 import {
   searchRelevantChunks,
   validateRetrievalLimit,
+  validateRetrievalMode,
   validateSearchQuery,
+  validateSourceTypes,
 } from "./retrieval.service.js";
 import { answerQuestion, validateRAGQuestion } from "./rag.service.js";
 
@@ -56,7 +60,12 @@ export const aiHealthController = asyncHandler(async (_req, res) => {
 export const searchController = asyncHandler(async (req, res) => {
   const startedAt = Date.now();
   const organizationId = req.organizationId;
-  const { query, limit } = req.body as { query?: unknown; limit?: unknown };
+  const { query, limit, sourceTypes, mode } = req.body as {
+    query?: unknown;
+    limit?: unknown;
+    sourceTypes?: unknown;
+    mode?: unknown;
+  };
 
   if (!organizationId) {
     throw createHttpError(400, "Organization ID is required");
@@ -64,11 +73,17 @@ export const searchController = asyncHandler(async (req, res) => {
 
   const trimmedQuery = validateSearchQuery(query);
   const searchLimit = validateRetrievalLimit(limit);
+  const retrievalMode = validateRetrievalMode(mode);
+  const sourceTypeFilter = validateSourceTypes(sourceTypes);
 
   const results = await searchRelevantChunks(
     trimmedQuery,
     organizationId,
-    searchLimit
+    searchLimit,
+    {
+      mode: retrievalMode,
+      ...(sourceTypeFilter ? { sourceTypes: sourceTypeFilter } : {}),
+    }
   );
 
   return res.status(200).json({
@@ -223,32 +238,34 @@ export const testIndexController = asyncHandler(async (req, res) => {
     chunks.map((chunk) => generateEmbedding(chunk.content))
   );
 
-  const storedChunks = await insertChunks(
-    chunks.map((chunk) => ({
-      content: chunk.content,
+  const storedCount = await replaceSourceIndex({
+    organizationId,
+    sourceType: "document",
+    sourceId: document.id,
+    sourceCreatedAt: document.createdAt,
+    chunks: chunks.map((chunk) => ({
       index: chunk.index,
+      content: chunk.content,
+      chunkHash: hashContent(chunk.content),
       metadata: {
         sourceType: "document",
         sourceId: document.id,
-        chunkHash: chunk.hash,
         tokenCount: chunk.tokenCount,
         charCount: chunk.charCount,
       },
     })),
-    embeddingResults.map((result) => result.embedding),
-    document.id,
-    organizationId
-  );
+    embeddings: embeddingResults.map((result) => result.embedding),
+    config: getEmbeddingConfig(),
+  });
 
   return res.status(201).json({
     success: true,
     document,
     model: embeddingResults[0]?.model,
     dimensions: embeddingResults[0]?.dimensions,
-    totalChunks: storedChunks.length,
-    chunks: storedChunks.map((chunk) => ({
-      id: chunk.id,
-      chunkIndex: chunk.chunkIndex,
+    totalChunks: storedCount,
+    chunks: chunks.map((chunk) => ({
+      chunkIndex: chunk.index,
       preview:
         chunk.content.length > 120
           ? chunk.content.slice(0, 120) + "..."
@@ -288,6 +305,8 @@ export const testSearchController = asyncHandler(async (req, res) => {
   return res.status(200).json({
     results: results.map((result) => ({
       id: result.id,
+      sourceType: result.sourceType,
+      sourceId: result.sourceId,
       documentId: result.documentId,
       chunkIndex: result.chunkIndex,
       content: result.content,

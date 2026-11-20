@@ -122,7 +122,7 @@ export function Copilot() {
               '',
               ...message.response.sources.map(
                 (source) =>
-                  `- ${source.sourceType} ${source.sourceId} · ${source.matchType === 'vector' && source.similarity !== null ? `similarity ${source.similarity.toFixed(4)}` : 'keyword match'}`
+                  `- ${source.sourceType} ${source.sourceId} · ${source.matchType !== 'keyword' && source.similarity !== null ? `${source.matchType} similarity ${source.similarity.toFixed(4)}` : 'keyword match'}`
               ),
               '',
             ]
@@ -293,7 +293,7 @@ export function Copilot() {
                                         <span>chunk {source.chunkIndex}</span>
                                         <span>·</span>
                                         <span className="text-on-surface-variant">
-                                          {source.matchType === 'vector' &&
+                                          {source.matchType !== 'keyword' &&
                                           source.similarity !== null
                                             ? `${source.similarity.toFixed(4)} cosine`
                                             : 'keyword match'}

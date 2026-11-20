@@ -154,7 +154,8 @@ export function Search() {
         </form>
 
         <div className="mt-3 flex flex-wrap items-center gap-1.5 font-mono text-label-sm text-outline">
-          <Badge tone="neutral">document chunks only</Badge>
+                      <Badge tone="neutral">documents · log groups · tickets</Badge>
+          <Badge tone="primary">pgvector + full-text</Badge>
           <span className="tabular">Min query 3 chars · max 500 · limit 1–10</span>
           <span className="ml-auto hidden items-center gap-1 sm:flex">
             <Icon name="lock" size={12} /> tenant-filtered
@@ -179,8 +180,9 @@ export function Search() {
             ))}
           </div>
           <p className="mt-3 border-t border-line pt-2 font-body text-[11px] leading-relaxed text-outline">
-            The backend searches embedded document chunks with cosine similarity. Keyword/hybrid
-            search, source-type filters and result pagination are not exposed by the current API.
+            The backend searches embedded documents, grouped log templates and tickets with cosine
+            similarity. Keyword/hybrid search, source-type filters and result pagination are not
+            exposed by the current API.
           </p>
         </Panel>
       ) : null}
@@ -275,7 +277,7 @@ export function Search() {
           <div className="space-y-2.5">
             <div className="flex items-center justify-between px-0.5">
               <h2 className="font-headline-sm text-headline-sm text-on-surface">Retrieved operational evidence</h2>
-              <span className="font-mono text-label-sm text-outline">sorted by cosine similarity</span>
+              <span className="font-mono text-label-sm text-outline">fused by reciprocal rank (RRF)</span>
             </div>
 
             {result.results.length === 0 ? (
@@ -293,21 +295,33 @@ export function Search() {
               </Panel>
             ) : (
               result.results.map((item, index) => (
-                <article key={`${item.documentId}-${item.chunkIndex}-${index}`} className="panel overflow-hidden">
+                <article key={`${item.sourceType}-${item.sourceId}-${item.chunkIndex}-${index}`} className="panel overflow-hidden">
                   <div className="flex flex-wrap items-center justify-between gap-2 border-b border-line bg-surface-low px-md py-2">
                     <div className="flex flex-wrap items-center gap-1.5">
-                      <Badge tone="primary">doc // chunk</Badge>
+                      <Badge tone="primary">
+                        {item.sourceType} // {item.matchType}
+                      </Badge>
                       <span className="font-mono text-label-sm text-outline">
-                        {shortId(item.documentId, 10)} · chunk {item.chunkIndex}
+                        {shortId(item.sourceId, 10)} · chunk {item.chunkIndex}
                       </span>
                     </div>
                     <div className="flex items-center gap-2">
                       <span className="font-mono text-label-sm text-on-surface-variant">
-                        similarity {item.similarity.toFixed(4)}
+                        {item.similarity !== null
+                          ? `cosine ${item.similarity.toFixed(4)}`
+                          : 'keyword match'}
                       </span>
-                      <div className="w-20">
-                        <Progress value={item.similarity * 100} tone={item.similarity >= 0.8 ? 'ok' : 'primary'} />
-                      </div>
+                      {item.similarity !== null ? (
+                        <div className="w-20">
+                          <Progress
+                            value={item.similarity * 100}
+                            tone={item.similarity >= 0.8 ? 'ok' : 'primary'}
+                          />
+                        </div>
+                      ) : null}
+                      <span className="font-mono text-[10px] text-outline">
+                        score {item.score.toFixed(4)}
+                      </span>
                     </div>
                   </div>
                   <div className="space-y-2 p-md">
@@ -323,14 +337,16 @@ export function Search() {
                       </pre>
                     </details>
                     <div className="flex flex-wrap gap-1.5 border-t border-line pt-2">
-                      <Button
-                        size="sm"
-                        variant="secondary"
-                        icon="open_in_new"
-                        onClick={() => navigate(`/documents?doc=${item.documentId}`)}
-                      >
-                        Open document
-                      </Button>
+                      {item.documentId ? (
+                        <Button
+                          size="sm"
+                          variant="secondary"
+                          icon="open_in_new"
+                          onClick={() => navigate(`/documents?doc=${item.documentId}`)}
+                        >
+                          Open document
+                        </Button>
+                      ) : null}
                       <Button
                         size="sm"
                         variant="ghost"

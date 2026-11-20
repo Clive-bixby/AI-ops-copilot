@@ -32,7 +32,7 @@ export type ConfidenceLevel = "high" | "medium" | "low";
 export type RAGSourceType = "document" | "log" | "ticket";
 
 /** how a source was found: embedding similarity, or a keyword match with no score */
-export type RAGMatchType = "vector" | "keyword";
+export type RAGMatchType = "vector" | "keyword" | "hybrid";
 
 export type RAGSource = {
   sourceType: RAGSourceType;
@@ -263,8 +263,8 @@ function getTopKForQueryType(queryType: QueryType): number {
 
 function fromVectorChunk(chunk: CitationSource): ContextChunk {
   return {
-    sourceType: "document",
-    sourceId: chunk.documentId,
+    sourceType: chunk.sourceType,
+    sourceId: chunk.sourceId,
     documentId: chunk.documentId,
     chunkIndex: chunk.chunkIndex,
     similarity: chunk.similarity,
@@ -282,6 +282,8 @@ function toSource(chunk: ContextChunk): RAGSource {
     chunkIndex: chunk.chunkIndex,
     similarity:
       chunk.similarity === null ? null : Number(chunk.similarity.toFixed(4)),
+    // Keyword-only evidence has no similarity, and hybrid evidence keeps the
+    // vector similarity while being labelled hybrid.
     matchType: chunk.matchType,
     preview: chunk.preview,
   };
@@ -367,9 +369,11 @@ function truncateToTokenBudget(content: string, maxTokens: number): string {
 
 function formatContextBlock(chunk: PromptContextChunk): string {
   const origin =
-    chunk.matchType === "vector"
-      ? `similarity: ${chunk.similarity === null ? "n/a" : chunk.similarity.toFixed(3)}`
-      : "match: keyword (no similarity score)";
+    chunk.matchType === "keyword"
+      ? "match: keyword (no similarity score)"
+      : `match: ${chunk.matchType}, similarity: ${
+          chunk.similarity === null ? "n/a" : chunk.similarity.toFixed(3)
+        }`;
 
   return [
     `[Source ${chunk.sourceNumber}]`,
