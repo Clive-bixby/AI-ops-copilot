@@ -11,7 +11,8 @@
     "worker": "tsx src/workers/ingestion.worker.ts",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "db:migrate": "tsx src/scripts/migrate.ts",
-    "db:baseline": "tsx src/scripts/migrate.ts --baseline"
+    "db:baseline": "tsx src/scripts/migrate.ts --baseline",
+    "eval:retrieval": "tsx src/scripts/evaluateRetrieval.ts"
   },
   "keywords": [],
   "author": "",
