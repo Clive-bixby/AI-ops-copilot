@@ -60,6 +60,7 @@ cd apps/api && npm run db:migrate
 
 # 4. Run
 cd apps/api && npm run dev                 # http://localhost:3000
+cd apps/api && npm run worker              # drains queued ingestion jobs (separate terminal)
 cd apps/web && npm run dev                 # http://localhost:5173
 ```
 
