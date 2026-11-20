@@ -21,6 +21,12 @@ export type FullTextResult = {
   createdAt: string;
   sourceCreatedAt: string | null;
   rank: number;
+  /**
+   * How many of the query's lexemes the chunk actually contains, compared as
+   * exact lexemes. Re-stemming an already-stemmed lexeme (`to_tsquery` on
+   * 'respons' yields 'respon') would undercount, so this is an array overlap.
+   */
+  matchedLexemes: number;
 };
 
 type FullTextRow = {
@@ -33,6 +39,7 @@ type FullTextRow = {
   created_at: string;
   source_created_at: string | null;
   rank: string | number;
+  matched_lexemes: number;
 };
 
 type SimilarityRow = {
@@ -248,26 +255,49 @@ export async function searchFullText(
 
   const result = await pool.query<FullTextRow>(
     `
-    WITH search_query AS (
+    WITH q AS (
+      SELECT tsvector_to_array(to_tsvector('english', $2)) AS lexemes
+    ),
+    search_query AS (
       SELECT string_agg(quote_literal(lexeme), ' | ')::tsquery AS query
-      FROM unnest(tsvector_to_array(to_tsvector('english', $2))) AS lexeme
+      FROM q, unnest(q.lexemes) AS lexeme
+    ),
+    candidates AS (
+      SELECT
+        sc.id,
+        sc.source_type,
+        sc.source_id,
+        sc.chunk_index,
+        sc.content,
+        sc.metadata,
+        sc.created_at,
+        sc.source_created_at,
+        sc.tsv,
+        ts_rank_cd(sc.tsv, search_query.query) AS rank
+      FROM source_chunks sc, search_query
+      WHERE sc.organization_id = $1
+        AND sc.tsv @@ search_query.query
+        AND ($3::text[] IS NULL OR sc.source_type = ANY($3::text[]))
+      ORDER BY rank DESC, sc.id
+      LIMIT $4
     )
     SELECT
-      sc.id,
-      sc.source_type,
-      sc.source_id,
-      sc.chunk_index,
-      sc.content,
-      sc.metadata,
-      sc.created_at,
-      sc.source_created_at,
-      ts_rank_cd(sc.tsv, search_query.query) AS rank
-    FROM source_chunks sc, search_query
-    WHERE sc.organization_id = $1
-      AND sc.tsv @@ search_query.query
-      AND ($3::text[] IS NULL OR sc.source_type = ANY($3::text[]))
-    ORDER BY rank DESC, sc.id
-    LIMIT $4
+      c.id,
+      c.source_type,
+      c.source_id,
+      c.chunk_index,
+      c.content,
+      c.metadata,
+      c.created_at,
+      c.source_created_at,
+      c.rank,
+      (
+        SELECT count(*)
+        FROM q, unnest(q.lexemes) AS lexeme
+        WHERE lexeme = ANY (tsvector_to_array(c.tsv))
+      )::int AS matched_lexemes
+    FROM candidates c
+    ORDER BY c.rank DESC, c.id
     `,
     [orgId, trimmedQuery, sourceTypes, searchLimit]
   );
@@ -283,5 +313,6 @@ export async function searchFullText(
     createdAt: row.created_at,
     sourceCreatedAt: row.source_created_at,
     rank: Number(row.rank),
+    matchedLexemes: row.matched_lexemes,
   }));
 }

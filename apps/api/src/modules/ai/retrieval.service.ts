@@ -344,6 +344,54 @@ export function fuseResults(input: {
   return unique.slice(0, input.limit);
 }
 
+/**
+ * How many results the keyword arm may contribute on its own. The OR query is
+ * deliberately permissive, so without a budget a chunk that shares one common
+ * word with the question still fills a fused slot. Three slots out of a
+ * ten-result page keeps the arm as a rescue path — it can still answer a search the vector
+ * arm missed entirely — without letting it pad the tail.
+ */
+export const MAX_KEYWORD_ONLY_RESULTS = 3;
+
+/**
+ * Keyword-only hits have to earn their place.
+ *
+ * A chunk the vector arm also returned keeps its keyword evidence: it is already
+ * relevant enough to be here, and its RRF bonus should not depend on how the
+ * full-text arm happened to score it. A chunk that only the keyword arm found
+ * competes for a small budget, and the slots go to the candidates that cover the
+ * most distinct query lexemes first, then to the strongest `ts_rank_cd`. Coverage
+ * first is what separates "redis evicted keys" from a marketing page that happens
+ * to contain the word cache: both match one lexeme, but only one matches the
+ * question.
+ */
+export function admitKeywordOnlyResults(
+  keywordResults: FullTextResult[],
+  vectorIds: ReadonlySet<string>
+): FullTextResult[] {
+  if (keywordResults.length === 0) {
+    return keywordResults;
+  }
+
+  const vectorBacked: FullTextResult[] = [];
+  const keywordOnly: FullTextResult[] = [];
+
+  for (const hit of keywordResults) {
+    (vectorIds.has(hit.id) ? vectorBacked : keywordOnly).push(hit);
+  }
+
+  const admittedKeywordOnly = keywordOnly
+    .sort(
+      (a, b) =>
+        b.matchedLexemes - a.matchedLexemes ||
+        b.rank - a.rank ||
+        a.id.localeCompare(b.id)
+    )
+    .slice(0, MAX_KEYWORD_ONLY_RESULTS);
+
+  return [...vectorBacked, ...admittedKeywordOnly];
+}
+
 function compareCandidates(a: FusedCandidate, b: FusedCandidate): number {
   if (b.score !== a.score) {
     return b.score - a.score;
@@ -479,9 +527,15 @@ export async function retrieveRelevantChunks(
   );
   const vectorSearchMs = elapsedMs(vectorStartedAt);
 
+  const vectorIds = new Set(vectorResults.map((hit) => hit.id));
+  const admittedKeywordResults = admitKeywordOnlyResults(
+    keywordResults,
+    vectorIds
+  );
+
   const fused = fuseResults({
     vectorResults,
-    keywordResults,
+    keywordResults: admittedKeywordResults,
     limit: searchLimit,
     mode,
   });
@@ -492,6 +546,8 @@ export async function retrieveRelevantChunks(
     organizationId: orgId,
     mode,
     rawCount: vectorResults.length + keywordResults.length,
+    keywordAdmitted: admittedKeywordResults.length,
+    keywordDropped: keywordResults.length - admittedKeywordResults.length,
     fusedCount: fused.length,
     embeddingMs,
     vectorSearchMs,

@@ -3,6 +3,7 @@ import { after, before, describe, it } from "node:test";
 
 import type { FullTextResult, SimilarityResult } from "./vector.service.js";
 import {
+  admitKeywordOnlyResults,
   fuseResults,
   RetrievalValidationError,
   toCitationSource,
@@ -37,7 +38,11 @@ function vectorHit(index: number, similarity = 0.9): SimilarityResult {
   };
 }
 
-function keywordHit(index: number, rank = 1): FullTextResult {
+function keywordHit(
+  index: number,
+  rank = 1,
+  matchedLexemes = 1
+): FullTextResult {
   return {
     id: `keyword-${index}`,
     sourceType: "ticket",
@@ -49,6 +54,7 @@ function keywordHit(index: number, rank = 1): FullTextResult {
     createdAt: "2026-01-01T00:00:00.000Z",
     sourceCreatedAt: null,
     rank,
+    matchedLexemes,
   };
 }
 
@@ -69,7 +75,7 @@ describe("fuseResults", () => {
     const fused = fuseResults({
       vectorResults: [vectorHit(1), shared],
       keywordResults: [
-        { ...shared, id: "keyword-shared", rank: 1 },
+        { ...shared, id: "keyword-shared", rank: 1, matchedLexemes: 1 },
         keywordHit(3),
       ],
       limit: 10,
@@ -90,7 +96,7 @@ describe("fuseResults", () => {
     // unless its own rank is better; RRF only sees positions.
     const fused = fuseResults({
       vectorResults: [vectorHit(1, 0.7)],
-      keywordResults: [{ ...keywordHit(9), rank: 99 }],
+      keywordResults: [{ ...keywordHit(9), rank: 99, matchedLexemes: 3 }],
       limit: 10,
       mode: "hybrid",
     });
@@ -104,7 +110,9 @@ describe("fuseResults", () => {
     const shared = vectorHit(4, 0.83);
     const [candidate] = fuseResults({
       vectorResults: [shared],
-      keywordResults: [{ ...shared, id: "keyword-shared", rank: 1 }],
+      keywordResults: [
+        { ...shared, id: "keyword-shared", rank: 1, matchedLexemes: 1 },
+      ],
       limit: 10,
       mode: "hybrid",
     });
@@ -120,7 +128,13 @@ describe("fuseResults", () => {
     const fused = fuseResults({
       vectorResults: [shared, vectorHit(6)],
       keywordResults: [
-        { ...shared, id: "keyword-shared", content: "same text, other arm", rank: 1 },
+        {
+          ...shared,
+          id: "keyword-shared",
+          content: "same text, other arm",
+          rank: 1,
+          matchedLexemes: 1,
+        },
       ],
       limit: 10,
       mode: "hybrid",
@@ -172,12 +186,63 @@ describe("fuseResults", () => {
   });
 });
 
+describe("admitKeywordOnlyResults", () => {
+  it("returns nothing for an empty keyword arm", () => {
+    assert.deepEqual(admitKeywordOnlyResults([], new Set()), []);
+  });
+
+  it("admits at most three keyword-only hits, best coverage first", () => {
+    const candidates = [
+      keywordHit(1, 0.9, 1),
+      keywordHit(2, 0.3, 3),
+      keywordHit(3, 0.2, 1),
+      keywordHit(4, 0.1, 2),
+      keywordHit(5, 0.1, 1),
+    ];
+
+    assert.deepEqual(
+      admitKeywordOnlyResults(candidates, new Set()).map((hit) => hit.sourceId),
+      ["ticket-2", "ticket-4", "ticket-1"]
+    );
+  });
+
+  it("keeps the rescue for a rare identifier", () => {
+    // Query: "PGPOOL_MAX environment variable". The vector arm returned nothing,
+    // so the runbook has to come from the keyword arm.
+    const runbook = keywordHit(1, 0.5, 2);
+
+    assert.deepEqual(
+      admitKeywordOnlyResults([runbook], new Set()).map((hit) => hit.sourceId),
+      ["ticket-1"]
+    );
+  });
+
+  it("never drops a chunk the vector arm already returned", () => {
+    const shared = [keywordHit(1, 0.9, 4), keywordHit(2, 0.5, 3)];
+    const vectorIds = new Set(shared.map((hit) => hit.id));
+
+    const admitted = admitKeywordOnlyResults(
+      [...shared, keywordHit(3, 0.1, 1), keywordHit(4, 0.1, 1), keywordHit(5, 0.1, 1)],
+      vectorIds
+    );
+
+    assert.deepEqual(
+      admitted.slice(0, 2).map((hit) => hit.sourceId),
+      ["ticket-1", "ticket-2"]
+    );
+    // Two vector-backed hits plus the three-slot keyword budget.
+    assert.equal(admitted.length, 5);
+  });
+});
+
 describe("toCitationSource", () => {
   it("marks a chunk found by both arms as hybrid", () => {
     const shared = vectorHit(1, 0.75);
     const [candidate] = fuseResults({
       vectorResults: [shared],
-      keywordResults: [{ ...shared, id: "keyword-shared", rank: 1 }],
+      keywordResults: [
+        { ...shared, id: "keyword-shared", rank: 1, matchedLexemes: 1 },
+      ],
       limit: 10,
       mode: "hybrid",
     });
