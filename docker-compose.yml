@@ -96,6 +96,39 @@ services:
         condition: service_completed_successfully
     restart: unless-stopped
 
+  # Ingestion consumer. Separate process and service so a slow embedding run
+  # cannot starve the API event loop. Shares the uploads volume because the
+  # document it parses was received by the API container.
+  worker:
+    build:
+      context: ./apps/api
+    command: ["npm", "run", "worker"]
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: postgres://${POSTGRES_USER:-aiops}:${POSTGRES_PASSWORD:-aiops}@db:5432/${POSTGRES_DB:-aiops}
+      DATABASE_SSL: "false"
+      REDIS_URL: redis://redis:6379
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      # Ollama runs on the host, not in this stack.
+      OLLAMA_URL: ${OLLAMA_URL:-http://host.docker.internal:11434}
+      OLLAMA_EMBEDDING_MODEL: ${OLLAMA_EMBEDDING_MODEL:-nomic-embed-text}
+      INGESTION_CONCURRENCY: ${INGESTION_CONCURRENCY:-2}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - uploads:/app/uploads
+    # The image healthcheck probes the HTTP API; this process serves no port.
+    healthcheck:
+      disable: true
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
   web:
     build:
       context: ./apps/web

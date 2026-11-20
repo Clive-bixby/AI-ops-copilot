@@ -78,6 +78,10 @@ export function Documents() {
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [uploadSuccess, setUploadSuccess] = useState<string | null>(null);
   const [dragActive, setDragActive] = useState(false);
+  // A 202 means the document is queued, not that it is already visible in the
+  // list. Keep polling for a short grace period so the first queued row is
+  // picked up without waiting for a manual refresh.
+  const [pollAfterUpload, setPollAfterUpload] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const types = useMemo(
@@ -104,7 +108,16 @@ export function Documents() {
     ['processing', 'pending'].includes(document.processingStatus)
   );
 
-  useInterval(() => void reload(true), hasProcessing ? 5000 : null);
+  useEffect(() => {
+    if (!pollAfterUpload) return;
+    const timer = window.setTimeout(() => setPollAfterUpload(false), 30_000);
+    return () => window.clearTimeout(timer);
+  }, [pollAfterUpload]);
+
+  useInterval(
+    () => void reload(true),
+    hasProcessing || uploading || pollAfterUpload ? 3000 : null
+  );
 
   useEffect(() => {
     if (documents.length > 0 && !selectedId) setSelectedId(documents[0]?.id ?? null);
@@ -157,7 +170,8 @@ export function Documents() {
     setUploadSuccess(null);
     try {
       const result = await api.documents.upload(file);
-      setUploadSuccess(`${result.filename} uploaded. Parsing, chunking and embeddings ran on the server.`);
+      setPollAfterUpload(true);
+      setUploadSuccess(`${result.filename} queued. Parsing, chunking and embedding run in the background.`);
       setSelectedId(result.id);
       await reload(true);
     } catch (caught) {
@@ -289,10 +303,10 @@ export function Documents() {
                 className={uploading ? 'animate-spin text-primary' : 'text-outline'}
               />
               <div className="font-label-lg text-label-lg font-semibold text-on-surface">
-                {uploading ? 'Uploading, chunking and embedding…' : 'Drop a runbook, RFC or post-mortem here'}
+                {uploading ? 'Uploading…' : 'Drop a runbook, RFC or post-mortem here'}
               </div>
               <div className="font-body text-body-sm text-on-surface-variant">
-                PDF, TXT, MD, CSV, JSON or LOG · processed immediately by the API
+                PDF, TXT, MD, CSV, JSON or LOG · queued for background indexing
               </div>
             </div>
 
@@ -557,8 +571,8 @@ export function Documents() {
                           </div>
 
                           <p className="border-t border-line pt-2 font-body text-[11px] leading-relaxed text-outline">
-                            The API exposes document detail and chunk previews. Re-index, delete and
-                            document-mutation endpoints are not implemented.
+                            Indexing runs in a background worker. This panel refreshes while the
+                            document is queued or processing.
                           </p>
                         </>
                       ) : (

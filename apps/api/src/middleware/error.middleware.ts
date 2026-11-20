@@ -28,6 +28,10 @@ import {
 } from "../modules/ai/rag.service.js";
 import { RetrievalValidationError } from "../modules/ai/retrieval.service.js";
 import { VectorValidationError } from "../modules/ai/vector.service.js";
+import {
+  IdempotencyConflictError,
+  IdempotencyKeyError,
+} from "../modules/ingestion/idempotency.service.js";
 
 type ErrorClass = new (...args: any[]) => Error;
 
@@ -60,6 +64,8 @@ const STATUS_RULES: ReadonlyArray<readonly [ErrorClass, number]> = [
   [RAGValidationError, 400],
   [RAGProviderTimeoutError, 504],
   [RAGProviderError, 502],
+  [IdempotencyKeyError, 400],
+  [IdempotencyConflictError, 409],
 ];
 
 function resolveStatus(error: HttpError): number {

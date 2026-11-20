@@ -67,8 +67,8 @@ export async function getOverview(organizationId: string): Promise<OverviewRespo
     ),
     pool.query<{ chunks: number }>(
       `SELECT COUNT(*)::int AS chunks
-       FROM document_chunks
-       WHERE organization_id = $1`,
+       FROM source_chunks
+       WHERE organization_id = $1 AND source_type = 'document'`,
       [organizationId]
     ),
     pool.query<{

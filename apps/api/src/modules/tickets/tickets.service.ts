@@ -1,5 +1,9 @@
 import { pool } from "../../core/db.js";
+import { logger } from "../../core/logger.js";
+import { hashContent } from "../ingestion/embeddingConfig.js";
+import { enqueueIngestionJob } from "../ingestion/jobQueue.js";
 import { parseRawTickets, TicketParseError } from "./ticket.parser.js";
+import { renderTicketContent } from "../ingestion/ticketIngest.service.js";
 
 type StoredTicketRow = {
   id: string;
@@ -14,7 +18,24 @@ type StoredTicketRow = {
 export class TicketsValidationError extends Error {}
 export { TicketParseError };
 
-export async function ingestTickets(organizationId: string, payload: unknown) {
+export type IngestTicketsResult = {
+  tickets: Array<{
+    id: string;
+    organizationId: string;
+    title: string;
+    description: string;
+    status: string;
+    priority: string;
+    createdAt: string;
+  }>;
+  jobsQueued: number;
+  indexingError: string | null;
+};
+
+export async function ingestTickets(
+  organizationId: string,
+  payload: unknown
+): Promise<IngestTicketsResult> {
   const orgId = (organizationId || "").trim();
   if (!orgId) {
     throw new TicketsValidationError("Organization ID is required");
@@ -27,29 +48,30 @@ export async function ingestTickets(organizationId: string, payload: unknown) {
   const placeholders: string[] = [];
 
   normalizedTickets.forEach((ticket, index) => {
-    const base = index * 5;
+    const base = index * 6;
     values.push(
       orgId,
       ticket.title,
       ticket.description,
       ticket.status,
-      ticket.priority
+      ticket.priority,
+      hashContent(renderTicketContent(ticket))
     );
     placeholders.push(
-      `($${base + 1}, $${base + 2}, $${base + 3}, $${base + 4}, $${base + 5})`
+      `($${base + 1}, $${base + 2}, $${base + 3}, $${base + 4}, $${base + 5}, $${base + 6})`
     );
   });
 
   const result = await pool.query<StoredTicketRow>(
     `
-    INSERT INTO tickets (organization_id, title, description, status, priority)
+    INSERT INTO tickets (organization_id, title, description, status, priority, content_hash)
     VALUES ${placeholders.join(", ")}
     RETURNING id, organization_id, title, description, status, priority, created_at
     `,
     values
   );
 
-  return result.rows.map((row) => ({
+  const tickets = result.rows.map((row) => ({
     id: row.id,
     organizationId: row.organization_id,
     title: row.title,
@@ -58,6 +80,30 @@ export async function ingestTickets(organizationId: string, payload: unknown) {
     priority: row.priority,
     createdAt: row.created_at,
   }));
+
+  let jobsQueued = 0;
+  let indexingError: string | null = null;
+
+  for (const ticket of tickets) {
+    try {
+      await enqueueIngestionJob({
+        organizationId: orgId,
+        sourceType: "ticket",
+        sourceId: ticket.id,
+      });
+      jobsQueued += 1;
+    } catch (error) {
+      indexingError =
+        error instanceof Error ? error.message : "Could not queue indexing";
+      logger.error("ingestion.ticket_enqueue_failed", {
+        organizationId: orgId,
+        ticketId: ticket.id,
+        error,
+      });
+    }
+  }
+
+  return { tickets, jobsQueued, indexingError };
 }
 
 export async function listTickets(organizationId: string) {
@@ -70,4 +116,18 @@ export async function listTickets(organizationId: string) {
     [organizationId]
   );
   return result.rows;
+}
+
+export async function getTicket(
+  organizationId: string,
+  ticketId: string
+): Promise<StoredTicketRow | null> {
+  const result = await pool.query<StoredTicketRow>(
+    `SELECT id, organization_id, title, description, status, priority, created_at
+     FROM tickets
+     WHERE id = $1 AND organization_id = $2`,
+    [ticketId, organizationId]
+  );
+
+  return result.rows[0] ?? null;
 }

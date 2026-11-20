@@ -4,6 +4,8 @@ export type CreateDocumentInput = {
   organizationId: string;
   filename: string;
   content?: string;
+  /** md5 of the original file bytes, used to reject duplicate uploads. */
+  fileHash?: string;
 };
 
 export type DocumentProcessingStatus =
@@ -35,10 +37,20 @@ const UUID_REGEX =
 
 export class DocumentsValidationError extends Error {}
 
+/**
+ * Create a document row, or return the existing one when the same bytes were
+ * already uploaded to this organization.
+ *
+ * Deduplication is enforced by the partial unique index
+ * `documents_org_file_hash_uniq`, so two concurrent identical uploads cannot
+ * both create a document. Returning the stored document is honest: the content
+ * is already indexed, and the caller should not process or embed it again.
+ */
 export async function createDocument(input: CreateDocumentInput) {
   const organizationId = (input.organizationId || "").trim();
   const filename = (input.filename || "").trim();
   const content = input.content ?? "";
+  const fileHash = input.fileHash?.trim() || null;
 
   if (!organizationId) {
     throw new DocumentsValidationError("Organization ID is required");
@@ -50,14 +62,33 @@ export async function createDocument(input: CreateDocumentInput) {
 
   const result = await pool.query<DocumentRow>(
     `
-    INSERT INTO documents (organization_id, filename, content)
-    VALUES ($1, $2, $3)
+    INSERT INTO documents (organization_id, filename, content, file_hash)
+    VALUES ($1, $2, $3, $4)
+    ON CONFLICT (organization_id, file_hash) WHERE file_hash IS NOT NULL
+    DO NOTHING
     RETURNING id, filename, created_at
     `,
-    [organizationId, filename, content]
+    [organizationId, filename, content, fileHash]
   );
 
-  const document = result.rows[0];
+  const inserted = result.rows[0];
+  if (inserted) {
+    return {
+      id: inserted.id,
+      filename: inserted.filename,
+      createdAt: inserted.created_at,
+      duplicate: false,
+    };
+  }
+
+  const existing = await pool.query<DocumentRow>(
+    `SELECT id, filename, created_at
+     FROM documents
+     WHERE organization_id = $1 AND file_hash = $2`,
+    [organizationId, fileHash]
+  );
+
+  const document = existing.rows[0];
   if (!document) {
     throw new Error("Failed to create document");
   }
@@ -66,6 +97,7 @@ export async function createDocument(input: CreateDocumentInput) {
     id: document.id,
     filename: document.filename,
     createdAt: document.created_at,
+    duplicate: true,
   };
 }
 
@@ -85,9 +117,12 @@ export async function listDocuments(organizationId: string) {
       d.processing_error,
       d.processed_at,
       d.created_at,
-      COUNT(dc.id)::int AS chunk_count
+      COUNT(sc.id)::int AS chunk_count
     FROM documents d
-    LEFT JOIN document_chunks dc ON dc.document_id = d.id
+    LEFT JOIN source_chunks sc
+      ON sc.organization_id = d.organization_id
+     AND sc.source_type = 'document'
+     AND sc.source_id = d.id
     WHERE d.organization_id = $1
     GROUP BY d.id
     ORDER BY d.created_at DESC
@@ -142,17 +177,17 @@ export async function getDocumentDetail(
   const [chunksResult, chunkCountResult] = await Promise.all([
     pool.query<DocumentChunkRow>(
       `SELECT id, chunk_index, content, metadata, created_at
-       FROM document_chunks
-       WHERE document_id = $1 AND organization_id = $2
+       FROM source_chunks
+       WHERE organization_id = $1 AND source_type = 'document' AND source_id = $2
        ORDER BY chunk_index ASC
        LIMIT 50`,
-      [docId, orgId]
+      [orgId, docId]
     ),
     pool.query<{ total: number }>(
       `SELECT COUNT(*)::int AS total
-       FROM document_chunks
-       WHERE document_id = $1 AND organization_id = $2`,
-      [docId, orgId]
+       FROM source_chunks
+       WHERE organization_id = $1 AND source_type = 'document' AND source_id = $2`,
+      [orgId, docId]
     ),
   ]);
 
@@ -177,10 +212,35 @@ export async function getDocumentDetail(
   };
 }
 
+export async function deleteDocument(
+  organizationId: string,
+  documentId: string
+): Promise<boolean> {
+  const orgId = (organizationId || "").trim();
+  const docId = (documentId || "").trim();
+
+  if (!orgId) {
+    throw new DocumentsValidationError("Organization ID is required");
+  }
+
+  if (!docId || !UUID_REGEX.test(docId)) {
+    throw new DocumentsValidationError("A valid document ID is required");
+  }
+
+  // Indexed chunks are removed by the documents_delete_source_chunks trigger.
+  const result = await pool.query(
+    `DELETE FROM documents WHERE id = $1 AND organization_id = $2`,
+    [docId, orgId]
+  );
+
+  return (result.rowCount ?? 0) > 0;
+}
+
 export async function updateDocumentContent(
   documentId: string,
   organizationId: string,
-  content: string
+  content: string,
+  contentHash?: string
 ) {
   const docId = (documentId || "").trim();
   const orgId = (organizationId || "").trim();
@@ -191,6 +251,19 @@ export async function updateDocumentContent(
 
   if (!orgId) {
     throw new DocumentsValidationError("Organization ID is required");
+  }
+
+  if (contentHash !== undefined) {
+    await pool.query(
+      `
+      UPDATE documents
+      SET content = $3, content_hash = $4
+      WHERE id = $1 AND organization_id = $2
+      `,
+      [docId, orgId, content, contentHash]
+    );
+
+    return;
   }
 
   await pool.query(

@@ -8,8 +8,10 @@ import { UnsupportedFileTypeError, upload } from "../../middleware/upload.middle
 import { MAX_DOCUMENT_BYTES } from "../../config/limits.js";
 import {
   createDocumentController,
+  deleteDocumentController,
   getDocumentController,
   listDocumentsController,
+  reprocessDocumentController,
 } from "./documents.controller.js";
 
 const documentsRouter = Router();
@@ -73,6 +75,18 @@ documentsRouter.post(
   orgMiddleware,
   uploadSingleFile,
   createDocumentController
+);
+documentsRouter.post(
+  "/:id/reprocess",
+  authMiddleware,
+  orgMiddleware,
+  reprocessDocumentController
+);
+documentsRouter.delete(
+  "/:id",
+  authMiddleware,
+  orgMiddleware,
+  deleteDocumentController
 );
 
 export default documentsRouter;
