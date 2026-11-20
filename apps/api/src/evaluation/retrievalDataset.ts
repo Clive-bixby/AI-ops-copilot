@@ -541,4 +541,24 @@ export const evaluationQueries: EvaluationQuery[] = [
     query: "restore the cluster to a point in time without overwriting the primary",
     relevant: ["d_backup"],
   },
+  // Multi-source queries. Real investigations are answered by a runbook, a log
+  // line and a ticket at once, and a single-source corpus cannot show whether a
+  // ranker returns the whole set: precision@K is capped by how many relevant
+  // sources a query even has.
+  {
+    query: "large uploads are either throttled or rejected by the body size limit",
+    relevant: ["d_s3", "l_s3", "t_upload"],
+  },
+  {
+    query: "payment gateway timeouts leave checkout failing and subscription updates delayed",
+    relevant: ["d_gateway", "l_gateway", "t_webhook"],
+  },
+  {
+    query: "login latency spike caused by an exhausted database connection pool",
+    relevant: ["d_pg_pool", "l_pool", "t_login"],
+  },
+  {
+    query: "redis eviction and cache misses slow down sign-in",
+    relevant: ["d_redis", "l_redis", "t_login"],
+  },
 ];
