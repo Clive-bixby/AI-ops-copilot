@@ -261,14 +261,19 @@ function getTopKForQueryType(queryType: QueryType): number {
   return baseTopK;
 }
 
-function fromVectorChunk(chunk: CitationSource): ContextChunk {
+/**
+ * Keep the arm that actually found the chunk. Relabelling every retrieval hit as
+ * `vector` would claim a cosine similarity for evidence that only matched on
+ * keywords, and would hide hybrid hits behind a single-arm label.
+ */
+export function fromRetrievedChunk(chunk: CitationSource): ContextChunk {
   return {
     sourceType: chunk.sourceType,
     sourceId: chunk.sourceId,
     documentId: chunk.documentId,
     chunkIndex: chunk.chunkIndex,
     similarity: chunk.similarity,
-    matchType: "vector",
+    matchType: chunk.matchType,
     preview: chunk.preview,
     content: chunk.content,
   };
@@ -627,7 +632,7 @@ export async function answerQuestion(
   const usedKeywordFallback = retrieval.chunks.length === 0;
   const candidates: ContextChunk[] = usedKeywordFallback
     ? await fetchKeywordMatches(trimmedQuestion, orgId)
-    : retrieval.chunks.map(fromVectorChunk);
+    : retrieval.chunks.map(fromRetrievedChunk);
 
   const contextChunks = buildContextChunks(candidates);
 
