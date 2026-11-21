@@ -5,6 +5,17 @@ import { getEmbeddingConfig } from "../ingestion/embeddingConfig.js";
 
 export type VectorizableSourceType = "document" | "log" | "ticket";
 
+/**
+ * Optional unified time filter over `source_chunks.source_created_at`.
+ *
+ * Rows with no source timestamp are excluded when a bound is supplied: an
+ * unknown time cannot honestly satisfy a requested window.
+ */
+export type TimeRangeFilter = {
+  start?: string;
+  end?: string;
+};
+
 const DEFAULT_SEARCH_LIMIT = 5;
 // The public API limit stays at 10; the candidate pool used before fusion is
 // larger so each arm has something to contribute to the merged ranking.
@@ -169,7 +180,7 @@ export async function searchSimilar(
   organizationId: string,
   limit?: number,
   minSimilarity?: number,
-  options?: { sourceTypes?: VectorizableSourceType[] }
+  options?: { sourceTypes?: VectorizableSourceType[]; timeRange?: TimeRangeFilter }
 ): Promise<SimilarityResult[]> {
   const orgId = validateId(organizationId, "Organization ID");
   const searchLimit = normalizeLimit(limit);
@@ -182,6 +193,7 @@ export async function searchSimilar(
     options?.sourceTypes && options.sourceTypes.length > 0
       ? options.sourceTypes
       : null;
+  const timeRange = options?.timeRange;
 
   const result = await pool.query<SimilarityRow>(
     `
@@ -202,6 +214,8 @@ export async function searchSimilar(
       AND embedding_dimensions = $6
       AND (embedding <=> $2::vector) <= $4
       AND ($7::text[] IS NULL OR source_type = ANY($7::text[]))
+      AND ($8::timestamptz IS NULL OR source_created_at >= $8::timestamptz)
+      AND ($9::timestamptz IS NULL OR source_created_at <= $9::timestamptz)
     ORDER BY embedding <=> $2::vector
     LIMIT $3
     `,
@@ -213,6 +227,8 @@ export async function searchSimilar(
       config.model,
       config.dimensions,
       sourceTypes,
+      timeRange?.start ?? null,
+      timeRange?.end ?? null,
     ]
   );
 
@@ -238,7 +254,7 @@ export async function searchFullText(
   query: string,
   organizationId: string,
   limit?: number,
-  options?: { sourceTypes?: VectorizableSourceType[] }
+  options?: { sourceTypes?: VectorizableSourceType[]; timeRange?: TimeRangeFilter }
 ): Promise<FullTextResult[]> {
   const orgId = validateId(organizationId, "Organization ID");
   const searchLimit = normalizeLimit(limit);
@@ -252,6 +268,7 @@ export async function searchFullText(
     options?.sourceTypes && options.sourceTypes.length > 0
       ? options.sourceTypes
       : null;
+  const timeRange = options?.timeRange;
 
   const result = await pool.query<FullTextRow>(
     `
@@ -278,6 +295,8 @@ export async function searchFullText(
       WHERE sc.organization_id = $1
         AND sc.tsv @@ search_query.query
         AND ($3::text[] IS NULL OR sc.source_type = ANY($3::text[]))
+        AND ($5::timestamptz IS NULL OR sc.source_created_at >= $5::timestamptz)
+        AND ($6::timestamptz IS NULL OR sc.source_created_at <= $6::timestamptz)
       ORDER BY rank DESC, sc.id
       LIMIT $4
     )
@@ -299,7 +318,14 @@ export async function searchFullText(
     FROM candidates c
     ORDER BY c.rank DESC, c.id
     `,
-    [orgId, trimmedQuery, sourceTypes, searchLimit]
+    [
+      orgId,
+      trimmedQuery,
+      sourceTypes,
+      searchLimit,
+      timeRange?.start ?? null,
+      timeRange?.end ?? null,
+    ]
   );
 
   return result.rows.map((row) => ({

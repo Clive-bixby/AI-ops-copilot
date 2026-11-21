@@ -11,6 +11,7 @@ function citation(overrides: Partial<CitationSource>): CitationSource {
     documentId: "document-1",
     matchType: "vector",
     chunkIndex: 0,
+    sourceCreatedAt: null,
     similarity: 0.9,
     score: 0.016,
     preview: "preview",

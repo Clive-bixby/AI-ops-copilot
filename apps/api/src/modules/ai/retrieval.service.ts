@@ -3,6 +3,7 @@ import { searchFullText, searchSimilar } from "./vector.service.js";
 import type {
   FullTextResult,
   SimilarityResult,
+  TimeRangeFilter,
   VectorizableSourceType,
 } from "./vector.service.js";
 import { elapsedMs, logAIMetrics, nowMs } from "./aiMetrics.util.js";
@@ -29,6 +30,8 @@ export type SearchRelevantChunk = {
   matchType: MatchType;
   sourceType: VectorizableSourceType;
   sourceId: string;
+  /** The source's own timestamp, or null when it has none. */
+  sourceCreatedAt: string | null;
   /** Present only for document chunks. */
   documentId: string | null;
   chunkIndex: number;
@@ -41,6 +44,8 @@ export type RetrievalOptions = {
   topK?: number;
   minSimilarity?: number;
   sourceTypes?: VectorizableSourceType[];
+  /** Optional unified source-time filter; undefined keeps Phase 2 behaviour. */
+  timeRange?: TimeRangeFilter;
   /** Defaults to hybrid; `vector` reproduces the pre-Phase-2 behaviour. */
   mode?: RetrievalMode;
 };
@@ -58,6 +63,7 @@ export type CitationSource = {
   documentId: string | null;
   matchType: MatchType;
   chunkIndex: number;
+  sourceCreatedAt: string | null;
   similarity: number | null;
   score: number;
   preview: string;
@@ -207,6 +213,66 @@ export function validateRetrievalMode(value: unknown): RetrievalMode {
   throw new RetrievalValidationError("mode must be 'hybrid' or 'vector'");
 }
 
+/**
+ * Optional source-time filter for retrieval.
+ *
+ * This is additive: with no range the arms run exactly the SQL they ran before
+ * the option existed, so `/ai/search` and `/ai/ask` keep their Phase 2
+ * behaviour. Investigations pass a range so evidence and the timeline are
+ * bounded by the window an engineer actually cares about.
+ */
+export type { TimeRangeFilter } from "./vector.service.js";
+
+function readTimeBound(value: unknown, label: string): string | undefined {
+  if (value === undefined || value === null || value === "") {
+    return undefined;
+  }
+
+  if (typeof value !== "string") {
+    throw new RetrievalValidationError(`${label} must be an ISO 8601 timestamp`);
+  }
+
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) {
+    throw new RetrievalValidationError(`${label} must be an ISO 8601 timestamp`);
+  }
+
+  return parsed.toISOString();
+}
+
+export function validateTimeRange(value: unknown): TimeRangeFilter | undefined {
+  if (value === undefined || value === null) {
+    return undefined;
+  }
+
+  if (typeof value !== "object" || Array.isArray(value)) {
+    throw new RetrievalValidationError("timeRange must be an object");
+  }
+
+  const record = value as Record<string, unknown>;
+  const start = readTimeBound(record.start, "timeRange.start");
+  const end = readTimeBound(record.end, "timeRange.end");
+
+  if (start === undefined && end === undefined) {
+    return undefined;
+  }
+
+  if (
+    start !== undefined &&
+    end !== undefined &&
+    new Date(end).getTime() <= new Date(start).getTime()
+  ) {
+    throw new RetrievalValidationError(
+      "timeRange.end must be after timeRange.start"
+    );
+  }
+
+  return {
+    ...(start !== undefined ? { start } : {}),
+    ...(end !== undefined ? { end } : {}),
+  };
+}
+
 function validateOrganizationId(organizationId: unknown): string {
   if (typeof organizationId !== "string" || organizationId.trim().length === 0) {
     throw new RetrievalValidationError("Organization ID is required");
@@ -242,6 +308,7 @@ export type FusedCandidate = {
   chunkIndex: number;
   content: string;
   similarity: number | null;
+  sourceCreatedAt: string | null;
   vectorRank: number | null;
   keywordRank: number | null;
   score: number;
@@ -270,6 +337,7 @@ export function fuseResults(input: {
     chunkIndex: number;
     content: string;
     similarity: number | null;
+    sourceCreatedAt: string | null;
     vectorRank: number | null;
     keywordRank: number | null;
   }) => {
@@ -292,6 +360,7 @@ export function fuseResults(input: {
     existing.vectorRank = candidate.vectorRank ?? existing.vectorRank;
     existing.keywordRank = candidate.keywordRank ?? existing.keywordRank;
     existing.similarity = candidate.similarity ?? existing.similarity;
+    existing.sourceCreatedAt = candidate.sourceCreatedAt ?? existing.sourceCreatedAt;
     existing.score =
       (existing.vectorRank === null ? 0 : 1 / (k + existing.vectorRank)) +
       (existing.keywordRank === null ? 0 : 1 / (k + existing.keywordRank));
@@ -306,6 +375,7 @@ export function fuseResults(input: {
       chunkIndex: hit.chunkIndex,
       content: hit.content,
       similarity: hit.similarity,
+      sourceCreatedAt: hit.sourceCreatedAt,
       vectorRank: index + 1,
       keywordRank: null,
     });
@@ -321,6 +391,7 @@ export function fuseResults(input: {
         chunkIndex: hit.chunkIndex,
         content: hit.content,
         similarity: null,
+        sourceCreatedAt: hit.sourceCreatedAt,
         vectorRank: null,
         keywordRank: index + 1,
       });
@@ -419,6 +490,7 @@ export function toCitationSource(candidate: FusedCandidate): CitationSource {
     documentId: candidate.documentId,
     matchType,
     chunkIndex: candidate.chunkIndex,
+    sourceCreatedAt: candidate.sourceCreatedAt,
     similarity:
       candidate.similarity === null
         ? null
@@ -438,6 +510,7 @@ export async function searchRelevantChunks(
   limit?: number,
   options?: {
     sourceTypes?: VectorizableSourceType[];
+    timeRange?: TimeRangeFilter;
     mode?: RetrievalMode;
   }
 ): Promise<SearchRelevantChunk[]> {
@@ -456,6 +529,10 @@ export async function searchRelevantChunks(
     retrievalOptions.sourceTypes = options.sourceTypes;
   }
 
+  if (options?.timeRange !== undefined) {
+    retrievalOptions.timeRange = options.timeRange;
+  }
+
   const result = await retrieveRelevantChunks(retrievalOptions);
 
   return result.chunks.map((chunk) => ({
@@ -467,6 +544,7 @@ export async function searchRelevantChunks(
     sourceId: chunk.sourceId,
     documentId: chunk.documentId,
     chunkIndex: chunk.chunkIndex,
+    sourceCreatedAt: chunk.sourceCreatedAt,
     preview: chunk.preview,
   }));
 }
@@ -488,6 +566,13 @@ export async function retrieveRelevantChunks(
     options.sourceTypes && options.sourceTypes.length > 0
       ? { sourceTypes: options.sourceTypes }
       : undefined;
+  const timeRange = validateTimeRange(options.timeRange);
+  // One options object for both arms. An empty object means "no filter" and is
+  // exactly the SQL the arms ran before this option existed.
+  const armOptions = {
+    ...(sourceFilters ? { sourceTypes: sourceFilters.sourceTypes } : {}),
+    ...(timeRange ? { timeRange } : {}),
+  };
 
   logAIMetrics("retrieval.started", {
     organizationId: orgId,
@@ -497,6 +582,7 @@ export async function retrieveRelevantChunks(
     minSimilarity,
     mode,
     sourceTypes: options.sourceTypes ?? "all",
+    timeRange: timeRange ?? "all",
   });
 
   const embeddingStartedAt = nowMs();
@@ -505,7 +591,7 @@ export async function retrieveRelevantChunks(
   const [embeddingResult, keywordResults] = await Promise.all([
     generateEmbedding(trimmedQuery),
     mode === "hybrid"
-      ? searchFullText(trimmedQuery, orgId, candidateLimit, sourceFilters)
+      ? searchFullText(trimmedQuery, orgId, candidateLimit, armOptions)
       : Promise.resolve([] as FullTextResult[]),
   ]);
   const embeddingMs = elapsedMs(embeddingStartedAt);
@@ -523,7 +609,7 @@ export async function retrieveRelevantChunks(
     orgId,
     candidateLimit,
     minSimilarity,
-    sourceFilters
+    armOptions
   );
   const vectorSearchMs = elapsedMs(vectorStartedAt);
 
