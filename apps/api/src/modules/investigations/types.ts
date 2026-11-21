@@ -110,6 +110,11 @@ export type EvidenceCollectionSummary = {
   existing: number;
   /** Retrieved candidates dropped because the source no longer exists. */
   filteredOut: number;
+  /**
+   * Graded weak and not stored. Automatic collection only keeps evidence that
+   * is direct, historical or related; an engineer can still link these.
+   */
+  withheld: number;
   warnings: string[];
 };
 

@@ -6,6 +6,10 @@ import type {
   DocumentSummary,
   IngestLogsResponse,
   IngestTicketsResponse,
+  InvestigationAnalysisResult,
+  InvestigationDetail,
+  InvestigationList,
+  InvestigationTimeline,
   LogEntry,
   LoginResponse,
   MembersResponse,
@@ -200,5 +204,25 @@ export const api = {
 
   admin: {
     members: () => request<MembersResponse>('/admin/members'),
+  },
+
+  investigations: {
+    list: (params: { limit?: number; offset?: number } = {}) => {
+      const search = new URLSearchParams();
+      if (params.limit !== undefined) search.set('limit', String(params.limit));
+      if (params.offset !== undefined) search.set('offset', String(params.offset));
+      const query = search.toString();
+      return request<InvestigationList>(`/investigations${query ? `?${query}` : ''}`);
+    },
+    get: (id: string) =>
+      request<InvestigationDetail>(`/investigations/${encodeURIComponent(id)}`),
+    timeline: (id: string) =>
+      request<InvestigationTimeline>(
+        `/investigations/${encodeURIComponent(id)}/timeline`
+      ),
+    analysis: (id: string) =>
+      request<InvestigationAnalysisResult>(
+        `/investigations/${encodeURIComponent(id)}/analysis`
+      ),
   },
 };

@@ -10,6 +10,7 @@ const navItems = [
   { icon: 'neurology', label: 'AI Copilot', to: '/copilot' },
   { icon: 'terminal', label: 'Logs Explorer', to: '/logs' },
   { icon: 'confirmation_number', label: 'Tickets & Incidents', to: '/tickets' },
+  { icon: 'radar', label: 'Investigations', to: '/investigations' },
   { icon: 'library_books', label: 'Knowledge & Docs', to: '/documents' },
   { icon: 'manage_search', label: 'Semantic Search', to: '/search' },
   { icon: 'admin_panel_settings', label: 'Admin & Roles', to: '/admin', adminOnly: true },

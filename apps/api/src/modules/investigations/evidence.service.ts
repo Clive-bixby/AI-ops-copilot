@@ -352,18 +352,25 @@ export async function collectInvestigationEvidence(input: {
     }))
   );
 
-  const { selected, unresolved } = selectEvidence({
+  const { selected, unresolved, withheld } = selectEvidence({
     candidates: deduped,
     sources,
     investigation: {
       service: scope.service,
       errorSignature: scope.error_signature,
     },
+    includeWeak: false,
   });
 
   if (unresolved > 0) {
     warnings.push(
       `${unresolved} retrieved source(s) no longer exist and were skipped.`
+    );
+  }
+
+  if (withheld > 0) {
+    warnings.push(
+      `${withheld} weak candidate(s) were withheld; automatic collection keeps only direct, historical and related evidence.`
     );
   }
 
@@ -391,6 +398,7 @@ export async function collectInvestigationEvidence(input: {
     candidates: candidates.length,
     deduped: deduped.length,
     selected: selected.length,
+    withheld,
     added,
     existing,
     unresolved,
@@ -405,6 +413,7 @@ export async function collectInvestigationEvidence(input: {
       added,
       existing,
       filteredOut: unresolved,
+      withheld,
       warnings,
     },
   };

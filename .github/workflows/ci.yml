@@ -27,6 +27,64 @@ jobs:
       - run: npm run typecheck
       - run: npm test
 
+  api-eval:
+    name: API (investigation evaluation, pgvector)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/api
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: ops
+          POSTGRES_PASSWORD: ops
+          POSTGRES_DB: opspilot
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U ops -d opspilot"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      DATABASE_URL: postgres://ops:ops@127.0.0.1:5432/opspilot
+      OLLAMA_URL: http://127.0.0.1:8799
+      OLLAMA_EMBEDDING_MODEL: nomic-embed-text
+      EMBEDDING_DIMENSIONS: "768"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: apps/api/package-lock.json
+      - run: npm ci
+      - run: npm run db:migrate
+      # Deterministic embeddings: replay recorded nomic-embed-text vectors so CI
+      # needs no model download and no paid key. A text missing from the fixture
+      # fails the stub instead of silently changing the measurement.
+      - name: Start embedding fixture stub
+        run: |
+          npx tsx src/scripts/embeddingFixtureServer.ts > /tmp/embedding-stub.log 2>&1 &
+          echo $! > /tmp/embedding-stub.pid
+          for _ in $(seq 1 60); do
+            if curl -sf http://127.0.0.1:8799/api/tags > /dev/null; then
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "embedding stub did not become ready"
+          cat /tmp/embedding-stub.log
+          exit 1
+      - run: npm run eval:investigations
+      - name: Stop embedding fixture stub
+        if: always()
+        run: |
+          if [ -f /tmp/embedding-stub.pid ]; then
+            kill "$(cat /tmp/embedding-stub.pid)" 2> /dev/null || true
+          fi
+
   web:
     name: Web (typecheck, build)
     runs-on: ubuntu-latest

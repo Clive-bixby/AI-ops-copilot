@@ -251,38 +251,62 @@ export type EvidenceGrading = {
   inclusionReason: string;
 };
 
-export function gradeEvidence(input: {
-  candidate: {
-    content: string;
-    matchType: EvidenceMatchType;
-    similarity: number | null;
-  };
-  source: {
-    sourceType: InvestigationSourceType;
-    sourceTitle: string;
-    status: string | null;
-    service: string | null;
-  };
-  investigation: {
-    service: string | null;
-    errorSignature: string | null;
-  };
-}): EvidenceGrading {
-  const { candidate, source, investigation } = input;
+/**
+ * A ticket that is already resolved or closed is a record of what happened
+ * before, so it can only be graded historical when something connects it to the
+ * investigation being worked on: the text carries the error signature, or the
+ * retrieval produced a similarity score at least as strong as related context.
+ *
+ * Resolution status on its own is not a relevance signal. A closed ticket about
+ * invoices says nothing about a checkout outage, so it must fall through to the
+ * ordinary rules and be graded related (same service, no textual link) or weak.
+ */
+function gradeResolvedTicket(input: {
+  candidate: { matchType: EvidenceMatchType; similarity: number | null };
+  source: { status: string | null };
+  signatureMatch: boolean;
+}): EvidenceGrading | null {
+  const { candidate, source, signatureMatch } = input;
+  const status = source.status ?? "resolved";
 
-  // A closed ticket describes what happened last time, whatever its text says.
-  if (
-    source.sourceType === "ticket" &&
-    (source.status === "resolved" || source.status === "closed")
-  ) {
+  if (signatureMatch) {
     return {
       relevance: "historical",
-      inclusionReason: `Ticket is already '${source.status}'; this is a historical record, not a current signal.`,
+      inclusionReason: `Ticket is already '${status}', and its text matches the investigation's error signature, so it is a historical record of this failure.`,
     };
   }
 
-  const haystack = `${source.sourceTitle}\n${candidate.content}`;
-  if (textMatchesSignature(haystack, investigation.errorSignature)) {
+  if (
+    candidate.similarity !== null &&
+    candidate.similarity >= EVIDENCE_LIMITS.relatedSimilarity
+  ) {
+    return {
+      relevance: "historical",
+      inclusionReason: `Ticket is already '${status}', and it was retrieved with cosine similarity ${candidate.similarity.toFixed(
+        2
+      )}, close enough to be a historical record of this failure.`,
+    };
+  }
+
+  return null;
+}
+
+/**
+ * Grade from an actual link to the investigation: signature match, similarity,
+ * service membership, then the retrieval arm as a last resort.
+ */
+function gradeSignals(input: {
+  candidate: {
+    matchType: EvidenceMatchType;
+    similarity: number | null;
+  };
+  source: { service: string | null };
+  signatureMatch: boolean;
+  investigation: { service: string | null };
+}): EvidenceGrading {
+  const { candidate, source, signatureMatch, investigation } = input;
+
+  if (signatureMatch) {
     return {
       relevance: "direct",
       inclusionReason: "Excerpt matches the investigation's error signature.",
@@ -353,6 +377,66 @@ export function gradeEvidence(input: {
   };
 }
 
+export function gradeEvidence(input: {
+  candidate: {
+    content: string;
+    matchType: EvidenceMatchType;
+    similarity: number | null;
+  };
+  source: {
+    sourceType: InvestigationSourceType;
+    sourceTitle: string;
+    status: string | null;
+    service: string | null;
+  };
+  investigation: {
+    service: string | null;
+    errorSignature: string | null;
+  };
+}): EvidenceGrading {
+  const { candidate, source, investigation } = input;
+
+  const haystack = `${source.sourceTitle}\n${candidate.content}`;
+  const signatureMatch = textMatchesSignature(
+    haystack,
+    investigation.errorSignature
+  );
+
+  const isHistoricalTicket =
+    source.sourceType === "ticket" &&
+    (source.status === "resolved" || source.status === "closed");
+
+  if (isHistoricalTicket) {
+    const historical = gradeResolvedTicket({
+      candidate,
+      source,
+      signatureMatch,
+    });
+
+    if (historical) {
+      return historical;
+    }
+  }
+
+  const grading = gradeSignals({
+    candidate,
+    source,
+    signatureMatch,
+    investigation,
+  });
+
+  if (!isHistoricalTicket) {
+    return grading;
+  }
+
+  // Say explicitly why an already-resolved ticket was not treated as history, so
+  // a reader does not assume the status alone was ignored by mistake.
+  return {
+    relevance: grading.relevance,
+    inclusionReason: `${grading.inclusionReason} The ticket is already '${source.status}', but resolution status alone does not make it historical.`,
+  };
+}
+
 export type SelectedEvidence = {
   candidate: RetrievalEvidenceCandidate;
   source: ResolvedEvidenceSource;
@@ -383,13 +467,22 @@ export function selectEvidence(input: {
   };
   maxItems?: number;
   maxPerSourceType?: number;
-}): { selected: SelectedEvidence[]; unresolved: number } {
+  /**
+   * Automatic collection sets this to false: evidence with no signal beyond a
+   * keyword hit is withheld rather than presented as findings. Manual links do
+   * not go through this function, so an engineer can still cite weak context
+   * deliberately.
+   */
+  includeWeak?: boolean;
+}): { selected: SelectedEvidence[]; unresolved: number; withheld: number } {
   const maxItems = input.maxItems ?? EVIDENCE_LIMITS.maxItems;
   const maxPerSourceType =
     input.maxPerSourceType ?? EVIDENCE_LIMITS.maxPerSourceType;
+  const includeWeak = input.includeWeak ?? true;
 
   const graded: SelectedEvidence[] = [];
   let unresolved = 0;
+  let withheld = 0;
 
   for (const candidate of dedupeCandidates(input.candidates)) {
     const source = input.sources.get(
@@ -406,6 +499,11 @@ export function selectEvidence(input: {
       source,
       investigation: input.investigation,
     });
+
+    if (!includeWeak && grading.relevance === "weak") {
+      withheld += 1;
+      continue;
+    }
 
     graded.push({ candidate, source, ...grading });
   }
@@ -448,7 +546,7 @@ export function selectEvidence(input: {
     selected.push(item);
   }
 
-  return { selected, unresolved };
+  return { selected, unresolved, withheld };
 }
 
 /**

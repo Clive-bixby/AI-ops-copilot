@@ -61,6 +61,7 @@ function failedCollection(error: unknown): EvidenceCollectionSummary {
     added: 0,
     existing: 0,
     filteredOut: 0,
+    withheld: 0,
     warnings: [
       error instanceof Error
         ? `Evidence collection failed: ${error.message}`

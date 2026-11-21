@@ -187,3 +187,149 @@ export interface IngestTicketsResponse {
   count: number;
   tickets: Ticket[];
 }
+
+/* ------------------------------------------------------------------ */
+/* Investigations                                                      */
+/* ------------------------------------------------------------------ */
+
+export type InvestigationStatus = 'open' | 'investigating' | 'resolved' | 'closed';
+export type InvestigationSeverity = 'low' | 'medium' | 'high' | 'critical';
+export type InvestigationSourceType = 'document' | 'log' | 'ticket';
+export type EvidenceRelevance = 'direct' | 'historical' | 'related' | 'weak';
+export type EvidenceMatchType = 'vector' | 'keyword' | 'hybrid' | 'manual';
+export type EvidenceOrigin = 'retrieval' | 'manual';
+export type HypothesisStatus = 'unverified' | 'supported' | 'rejected';
+export type TimelineCorrelation =
+  | 'signature_match'
+  | 'same_service'
+  | 'in_window'
+  | 'before_window'
+  | 'after_window'
+  | 'time_cluster';
+
+export interface Investigation {
+  id: string;
+  organizationId: string;
+  title: string;
+  description: string;
+  status: InvestigationStatus;
+  severity: InvestigationSeverity;
+  service: string | null;
+  errorSignature: string | null;
+  windowStart: string | null;
+  windowEnd: string | null;
+  sourceTypes: InvestigationSourceType[] | null;
+  resolutionSummary: string | null;
+  createdBy: string;
+  createdByEmail: string | null;
+  resolvedAt: string | null;
+  closedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface InvestigationEvidenceItem {
+  id: string;
+  investigationId: string;
+  sourceType: InvestigationSourceType;
+  sourceId: string;
+  chunkIndex: number;
+  sourceTitle: string;
+  excerpt: string;
+  /** null when the source genuinely has no timestamp of its own. */
+  sourceCreatedAt: string | null;
+  sourceMetadata: Record<string, unknown> | null;
+  matchType: EvidenceMatchType;
+  retrievalScore: number;
+  similarity: number | null;
+  relevance: EvidenceRelevance;
+  inclusionReason: string;
+  retrievalQuery: string;
+  origin: EvidenceOrigin;
+  addedBy: string | null;
+  createdAt: string;
+}
+
+export interface InvestigationDetail {
+  investigation: Investigation;
+  activity: Array<{
+    id: string;
+    type: string;
+    actorUserId: string | null;
+    actorEmail: string | null;
+    body: string | null;
+    metadata: Record<string, unknown> | null;
+    createdAt: string;
+  }>;
+  evidence: InvestigationEvidenceItem[];
+}
+
+export interface InvestigationList {
+  investigations: Investigation[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+export interface TimelineEvent {
+  id: string;
+  kind: string;
+  at: string;
+  atSourceTime: boolean;
+  title: string;
+  detail: string | null;
+  evidenceId: string | null;
+  sourceType: InvestigationSourceType | null;
+  relevance: EvidenceRelevance | null;
+  correlations: TimelineCorrelation[];
+}
+
+export interface InvestigationTimeline {
+  investigationId: string;
+  windowStart: string | null;
+  windowEnd: string | null;
+  generatedAt: string;
+  events: TimelineEvent[];
+  summary: {
+    total: number;
+    clipped: boolean;
+    undated: number;
+    evidence: number;
+    activity: number;
+    bySourceType: Record<string, number>;
+    correlations: Record<string, number>;
+  };
+}
+
+export interface InvestigationAnalysis {
+  id: string;
+  investigationId: string;
+  status: 'pending' | 'succeeded' | 'failed';
+  failureReason: string | null;
+  analysisVersion: number;
+  provider: string;
+  model: string;
+  summary: string | null;
+  keyObservations: string[];
+  nextSteps: string[];
+  insufficientEvidence: boolean;
+  missingInformation: string[];
+  generationMs: number | null;
+  createdAt: string;
+}
+
+export interface AnalysisHypothesis {
+  id: string;
+  statement: string;
+  rationale: string;
+  status: HypothesisStatus;
+  statusSource: 'model' | 'user';
+  missingInformation: string[];
+  verificationSteps: string[];
+  analysisId: string | null;
+}
+
+export interface InvestigationAnalysisResult {
+  analysis: InvestigationAnalysis | null;
+  hypotheses: AnalysisHypothesis[];
+}

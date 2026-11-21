@@ -6,6 +6,7 @@ import { Logs } from './pages/Logs';
 import { Documents } from './pages/Documents';
 import { Settings } from './pages/Settings';
 import { Tickets } from './pages/Tickets';
+import { Investigations } from './pages/Investigations';
 import { Search } from './pages/Search';
 import { Admin } from './pages/Admin';
 import { Login } from './pages/Login';
@@ -42,6 +43,7 @@ function Shell() {
         <Route path="copilot" element={<Copilot />} />
         <Route path="logs" element={<Logs />} />
         <Route path="tickets" element={<Tickets />} />
+        <Route path="investigations" element={<Investigations />} />
         <Route path="documents" element={<Documents />} />
         <Route path="search" element={<Search />} />
         <Route path="admin" element={<Admin />} />

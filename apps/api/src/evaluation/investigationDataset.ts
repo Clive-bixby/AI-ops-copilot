@@ -13,6 +13,11 @@ export type EvaluationDocumentSeed = {
   key: string;
   filename: string;
   content: string;
+  /**
+   * Upload time relative to seeding time. Omitted means NOW, and `null` seeds a
+   * genuinely undated document (documents.created_at is nullable).
+   */
+  createdMinutesAgo?: number | null;
 };
 
 export type EvaluationTicketSeed = {
@@ -21,6 +26,8 @@ export type EvaluationTicketSeed = {
   description: string;
   status: string;
   priority: string;
+  /** Creation time relative to seeding; omitted means NOW. */
+  createdMinutesAgo?: number | null;
 };
 
 export type EvaluationLogSeed = {
@@ -39,6 +46,22 @@ export type EvaluationExpectedEvidence = {
   allowedRelevance: EvaluationRelevance[];
 };
 
+export type EvaluationWindow = {
+  /** Investigation scope, expressed relative to seeding time. */
+  startMinutesAgo: number;
+  endMinutesAgo: number;
+  /** Sources that must be collected and carry a source timestamp in the window. */
+  inWindow: string[];
+  /** Sources whose own timestamp falls before the window: never auto-collected. */
+  beforeWindow: string[];
+  /** Sources whose own timestamp falls after the window: never auto-collected. */
+  afterWindow: string[];
+  /** Undated sources: an unknown time cannot satisfy a window, so never auto-collected. */
+  undated: string[];
+  /** Linked by hand after collection to prove a pre-window source is still kept. */
+  manualLink: string;
+};
+
 export type InvestigationEvaluationCase = {
   name: string;
   investigation: {
@@ -48,15 +71,17 @@ export type InvestigationEvaluationCase = {
     service: string;
     errorSignature: string;
   };
+  window?: EvaluationWindow;
   /** Empty means the honest answer is "no evidence". */
   expected: EvaluationExpectedEvidence[];
   /** Sources that must never be selected for this case. */
   forbidden: string[];
   /**
-   * For a no-evidence case, any selection must be graded weak: the system may
-   * offer low-confidence context but must not claim it is direct evidence.
+   * For a no-evidence case, automatic collection must select nothing. Weak
+   * keyword hits are not findings, and presenting them as an evidence set would
+   * dress up noise as investigation progress.
    */
-  weakOnly?: boolean;
+  expectEmpty?: boolean;
 };
 
 export const evaluationDocuments: EvaluationDocumentSeed[] = [
@@ -102,6 +127,43 @@ Failed invoice charges are retried three times with exponential backoff. A payme
     content: `On-call escalation
 
 A severity one incident pages the primary on-call immediately and the secondary after five minutes without acknowledgement. Severity two pages the primary only and is acknowledged within fifteen minutes.`,
+  },
+  // Windowed case: one source inside the window, one before it, one after it, and
+  // one with no timestamp at all. The upload times are what the window is
+  // measured against (source_chunks.source_created_at).
+  {
+    key: "doc-window-inside",
+    filename: "checkout-deadline-runbook.md",
+    content: `Checkout deadline handling
+
+A request that reports "deadline exceeded while waiting for upstream quote service" gave up before the quote service answered. Compare the quote service p99 latency with the checkout client timeout; the client timeout must stay above that p99 or every slow call becomes a 504.
+
+Mitigation: raise the quote pool, warm the quote cache after a restart, and only then lower the checkout timeout.`,
+    createdMinutesAgo: 90,
+  },
+  {
+    key: "doc-window-before",
+    filename: "quote-timeout-postmortem.md",
+    content: `Postmortem: upstream quote timeouts
+
+The incident logged "deadline exceeded while waiting for upstream quote service" for eleven minutes. The quote service had been restarted into a cold cache, and warm-up traffic pushed every call past the client deadline.`,
+    createdMinutesAgo: 400,
+  },
+  {
+    key: "doc-window-after",
+    filename: "quote-timeout-followup.md",
+    content: `Follow-up: quote timeout instrumentation
+
+After the change, a call that logs "deadline exceeded while waiting for upstream quote service" now also records the quote queue depth, so the next investigation can tell a cold cache apart from a slow dependency.`,
+    createdMinutesAgo: 5,
+  },
+  {
+    key: "doc-window-undated",
+    filename: "legacy-quote-notes.md",
+    content: `Legacy notes on quote timeouts
+
+Old exports surfaced "deadline exceeded while waiting for upstream quote service" whenever the network path to the quote host flapped. These notes have no upload date, so their place in any timeline is unknown.`,
+    createdMinutesAgo: null,
   },
 ];
 
@@ -167,6 +229,15 @@ export const evaluationLogs: EvaluationLogSeed[] = [
     service: "reports",
     minutesAgo: 5,
     marker: "Scheduled report job",
+  },
+  {
+    key: "log-window-inside",
+    level: "error",
+    message:
+      "deadline exceeded while waiting for upstream quote service (quote-1)",
+    service: "checkout",
+    minutesAgo: 60,
+    marker: "quote service (quote-1)",
   },
 ];
 
@@ -238,6 +309,31 @@ export const investigationEvaluationCases: InvestigationEvaluationCase[] = [
     },
     expected: [],
     forbidden: [],
-    weakOnly: true,
+    expectEmpty: true,
+  },
+  {
+    name: "windowed-deadline",
+    investigation: {
+      title: "Checkout 504s while the quote service is slow",
+      description:
+        "Checkout requests return 504 and logs report the deadline being exceeded while the quote service is slow.",
+      severity: "high",
+      service: "checkout",
+      errorSignature: "deadline exceeded while waiting for upstream quote service",
+    },
+    window: {
+      startMinutesAgo: 180,
+      endMinutesAgo: 30,
+      inWindow: ["log-window-inside", "doc-window-inside"],
+      beforeWindow: ["doc-window-before"],
+      afterWindow: ["doc-window-after"],
+      undated: ["doc-window-undated"],
+      manualLink: "doc-window-before",
+    },
+    expected: [
+      { key: "log-window-inside", allowedRelevance: ["direct"] },
+      { key: "doc-window-inside", allowedRelevance: ["direct", "related"] },
+    ],
+    forbidden: ["doc-window-before", "doc-window-after", "doc-window-undated"],
   },
 ];

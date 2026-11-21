@@ -164,20 +164,125 @@ describe("textMatchesSignature", () => {
 });
 
 describe("gradeEvidence", () => {
-  it("grades a resolved ticket as historical evidence", () => {
+  it("grades a resolved ticket that matches the signature as historical", () => {
     const grading = gradeEvidence({
-      candidate: candidate({ sourceType: "ticket", similarity: null, matchType: "keyword" }),
+      candidate: candidate({
+        sourceType: "ticket",
+        similarity: 0.55,
+        content: "Pods failed with ImagePullBackOff; rolling back restored service.",
+      }),
       source: source({
         sourceType: "ticket",
-        sourceId: "doc-1",
-        sourceTitle: "Pool exhaustion after release",
+        sourceTitle: "Release 1.42.0 rolled back after image pull failures",
         status: "resolved",
+      }),
+      investigation: { service: null, errorSignature: "ImagePullBackOff" },
+    });
+
+    assert.equal(grading.relevance, "historical");
+    assert.match(grading.inclusionReason, /already 'resolved'/);
+    assert.match(grading.inclusionReason, /matches the investigation's error signature/);
+  });
+
+  it("grades a closed ticket with sufficient similarity as historical", () => {
+    const grading = gradeEvidence({
+      candidate: candidate({ sourceType: "ticket", similarity: 0.74 }),
+      source: source({
+        sourceType: "ticket",
+        sourceTitle: "Redis maxmemory eviction incident",
+        status: "closed",
       }),
       investigation: NO_INVESTIGATION,
     });
 
     assert.equal(grading.relevance, "historical");
-    assert.match(grading.inclusionReason, /already 'resolved'/);
+    assert.match(grading.inclusionReason, /already 'closed'/);
+    assert.match(grading.inclusionReason, /0\.74/);
+  });
+
+  it("does not treat resolution status alone as a relevance signal", () => {
+    const grading = gradeEvidence({
+      candidate: candidate({
+        sourceType: "ticket",
+        similarity: null,
+        matchType: "keyword",
+      }),
+      source: source({
+        sourceType: "ticket",
+        sourceTitle: "Invoice retries exhausted for annual plan",
+        status: "resolved",
+      }),
+      investigation: NO_INVESTIGATION,
+    });
+
+    assert.equal(grading.relevance, "weak");
+    assert.match(grading.inclusionReason, /keywords only/);
+    assert.match(grading.inclusionReason, /resolution status alone/);
+  });
+
+  it("grades an unrelated resolved ticket with a low similarity as weak", () => {
+    const grading = gradeEvidence({
+      candidate: candidate({
+        sourceType: "ticket",
+        similarity: 0.42,
+        content: "Invoice charge declined with a 402 from the gateway.",
+      }),
+      source: source({
+        sourceType: "ticket",
+        sourceTitle: "Payment declines during billing retry",
+        status: "resolved",
+      }),
+      investigation: {
+        service: null,
+        errorSignature: "connection pool exhausted: too many clients already",
+      },
+    });
+
+    assert.equal(grading.relevance, "weak");
+    assert.match(grading.inclusionReason, /below the direct and related/);
+  });
+
+  it("falls back to related only for service membership, not history", () => {
+    const grading = gradeEvidence({
+      candidate: candidate({
+        sourceType: "ticket",
+        similarity: 0.35,
+        content: "Ingress chart values were reorganised.",
+      }),
+      source: source({
+        sourceType: "ticket",
+        sourceTitle: "Ingress chart cleanup",
+        status: "resolved",
+        service: "ingress",
+      }),
+      investigation: { service: "ingress", errorSignature: null },
+    });
+
+    assert.equal(grading.relevance, "related");
+    assert.match(grading.inclusionReason, /service 'ingress'/);
+    assert.match(grading.inclusionReason, /resolution status alone/);
+  });
+
+  it("keeps an open ticket with the same signature direct", () => {
+    const grading = gradeEvidence({
+      candidate: candidate({
+        sourceType: "ticket",
+        similarity: null,
+        matchType: "keyword",
+        content: "Checkout 500: connection pool exhausted: too many clients already",
+      }),
+      source: source({
+        sourceType: "ticket",
+        sourceTitle: "Checkout failing for some users",
+        status: "open",
+      }),
+      investigation: {
+        service: null,
+        errorSignature: "connection pool exhausted: too many clients already",
+      },
+    });
+
+    assert.equal(grading.relevance, "direct");
   });
 
   it("grades a signature match as direct evidence", () => {
@@ -373,6 +478,40 @@ describe("selectEvidence", () => {
     });
 
     assert.equal(selected.length, 2);
+  });
+
+  it("withholds weak evidence from automatic collection", () => {
+    const { selected, withheld } = selectEvidence({
+      candidates: [
+        candidate({ sourceId: "direct-1", similarity: 0.95 }),
+        candidate({ sourceId: "weak-1", matchType: "keyword", similarity: null }),
+      ],
+      sources: sourceMap([
+        source({ sourceId: "direct-1" }),
+        source({ sourceId: "weak-1" }),
+      ]),
+      investigation: NO_INVESTIGATION,
+      includeWeak: false,
+    });
+
+    assert.deepEqual(
+      selected.map((item) => item.candidate.sourceId),
+      ["direct-1"]
+    );
+    assert.equal(withheld, 1);
+  });
+
+  it("keeps weak evidence unless collection asks to withhold it", () => {
+    const { selected, withheld } = selectEvidence({
+      candidates: [
+        candidate({ sourceId: "weak-1", matchType: "keyword", similarity: null }),
+      ],
+      sources: sourceMap([source({ sourceId: "weak-1" })]),
+      investigation: NO_INVESTIGATION,
+    });
+
+    assert.equal(selected.length, 1);
+    assert.equal(withheld, 0);
   });
 
   it("counts candidates whose source no longer exists instead of storing them", () => {
