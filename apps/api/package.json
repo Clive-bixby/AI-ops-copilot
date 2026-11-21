@@ -12,7 +12,8 @@
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "db:migrate": "tsx src/scripts/migrate.ts",
     "db:baseline": "tsx src/scripts/migrate.ts --baseline",
-    "eval:retrieval": "tsx src/scripts/evaluateRetrieval.ts"
+    "eval:retrieval": "tsx src/scripts/evaluateRetrieval.ts",
+    "eval:investigations": "tsx src/scripts/evaluateInvestigations.ts"
   },
   "keywords": [],
   "author": "",
