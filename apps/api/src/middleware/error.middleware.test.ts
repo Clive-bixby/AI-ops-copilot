@@ -6,6 +6,11 @@ import { errorMiddleware } from "./error.middleware.js";
 import { AuthUnauthorizedError, AuthValidationError } from "../modules/auth/auth.service.js";
 import { LogParseError } from "../modules/logs/log.parser.js";
 import { RAGProviderTimeoutError } from "../modules/ai/rag.service.js";
+import {
+  InvestigationConflictError,
+  InvestigationNotFoundError,
+  InvestigationValidationError,
+} from "../modules/investigations/errors.js";
 
 type Captured = { status: number; body: Record<string, unknown> };
 
@@ -49,6 +54,18 @@ describe("errorMiddleware", () => {
     assert.equal(handle(new AuthValidationError("email required")).status, 400);
     assert.equal(handle(new LogParseError("no message")).status, 400);
     assert.equal(handle(new RAGProviderTimeoutError("slow")).status, 504);
+  });
+
+  it("maps investigation errors to validation, not-found and conflict", () => {
+    assert.equal(handle(new InvestigationValidationError("bad title")).status, 400);
+    assert.equal(handle(new InvestigationNotFoundError()).status, 404);
+    assert.equal(handle(new InvestigationConflictError("closed")).status, 409);
+    // A not-found must keep its message: it is the only answer a cross-tenant
+    // probe is allowed to receive.
+    assert.equal(
+      handle(new InvestigationNotFoundError()).body.error,
+      "Investigation not found"
+    );
   });
 
   it("keeps the message for 4xx and hides internals for 5xx", () => {

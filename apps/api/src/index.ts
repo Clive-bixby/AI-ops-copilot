@@ -19,6 +19,7 @@ import ticketsRouter from "./modules/tickets/tickets.routes.js";
 import aiRouter from "./modules/ai/ai.routes.js";
 import insightsRouter from "./modules/insights/insights.routes.js";
 import ingestionRouter from "./modules/ingestion/ingestion.routes.js";
+import investigationsRouter from "./modules/investigations/investigation.routes.js";
 
 const app = express();
 const PORT = Number(process.env.PORT || 3000);
@@ -145,6 +146,7 @@ app.use("/tickets", ticketsRouter);
 app.use("/ai", aiRouter);
 app.use("/insights", insightsRouter);
 app.use("/ingestion", ingestionRouter);
+app.use("/investigations", investigationsRouter);
 
 app.get("/protected", authMiddleware, (req, res) => {
   res.json({ message: "You are authenticated" });
