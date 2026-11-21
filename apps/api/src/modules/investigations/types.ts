@@ -120,6 +120,59 @@ export type InvestigationList = {
   offset: number;
 };
 
+export type AnalysisStatus = "pending" | "succeeded" | "failed";
+
+export type HypothesisStatus = "unverified" | "supported" | "rejected";
+
+export type HypothesisStatusSource = "model" | "user";
+
+export type AnalysisHypothesisEvidence = {
+  evidenceId: string;
+  relation: "supports" | "contradicts";
+};
+
+export type AnalysisHypothesis = {
+  id: string;
+  investigationId: string;
+  statement: string;
+  rationale: string;
+  status: HypothesisStatus;
+  statusSource: HypothesisStatusSource;
+  missingInformation: string[];
+  verificationSteps: string[];
+  /** Evidence the model cited; the ids always resolve to this investigation. */
+  evidence: AnalysisHypothesisEvidence[];
+  analysisId: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type InvestigationAnalysis = {
+  id: string;
+  investigationId: string;
+  status: AnalysisStatus;
+  failureReason: string | null;
+  analysisVersion: number;
+  provider: string;
+  model: string;
+  /** Exactly the evidence rows supplied to the model. */
+  evidenceIds: string[];
+  summary: string | null;
+  keyObservations: string[];
+  nextSteps: string[];
+  insufficientEvidence: boolean;
+  missingInformation: string[];
+  generationMs: number | null;
+  createdBy: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type InvestigationAnalysisResult = {
+  analysis: InvestigationAnalysis | null;
+  hypotheses: AnalysisHypothesis[];
+};
+
 export type TimelineEventKind = InvestigationActivityType | "evidence_source";
 
 /**

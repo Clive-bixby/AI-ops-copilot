@@ -32,6 +32,7 @@ import {
   InvestigationNotFoundError,
   InvestigationValidationError,
 } from "../modules/investigations/errors.js";
+import { AnalysisFormatError } from "../modules/investigations/analysisPolicy.js";
 import { VectorValidationError } from "../modules/ai/vector.service.js";
 import {
   IdempotencyConflictError,
@@ -72,6 +73,7 @@ const STATUS_RULES: ReadonlyArray<readonly [ErrorClass, number]> = [
   [IdempotencyKeyError, 400],
   [IdempotencyConflictError, 409],
   [InvestigationValidationError, 400],
+  [AnalysisFormatError, 400],
   // A malformed id and an id owned by another organization answer the same 404.
   [InvestigationNotFoundError, 404],
   [InvestigationConflictError, 409],

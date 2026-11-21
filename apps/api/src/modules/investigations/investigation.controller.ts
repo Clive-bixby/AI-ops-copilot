@@ -2,6 +2,11 @@ import { logger } from "../../core/logger.js";
 import { asyncHandler } from "../../utils/asyncHandler.js";
 import { createHttpError } from "../../utils/httpError.js";
 import {
+  analyzeInvestigation,
+  getInvestigationAnalysis,
+  updateHypothesisStatus,
+} from "./analysis.service.js";
+import {
   collectInvestigationEvidence,
   linkInvestigationEvidence,
   unlinkInvestigationEvidence,
@@ -152,6 +157,58 @@ export const createInvestigationNoteController = asyncHandler(
     return res.status(201).json({ activity });
   }
 );
+
+/**
+ * POST /investigations/:id/analyze
+ *
+ * Synchronous: the response carries the stored analysis and its hypotheses. A
+ * failed run is recorded and reported as a provider error, never as an empty
+ * analysis.
+ */
+export const analyzeInvestigationController = asyncHandler(
+  async (req, res) => {
+    const organizationId = requireOrganization(req.organizationId);
+    const userId = requireUserId(req.user?.id);
+
+    const result = await analyzeInvestigation({
+      organizationId,
+      investigationId: readRouteId(req.params.id),
+      userId,
+    });
+
+    return res.status(200).json(result);
+  }
+);
+
+/** GET /investigations/:id/analysis — latest run plus the current hypotheses. */
+export const getInvestigationAnalysisController = asyncHandler(
+  async (req, res) => {
+    const organizationId = requireOrganization(req.organizationId);
+
+    const result = await getInvestigationAnalysis(
+      organizationId,
+      readRouteId(req.params.id)
+    );
+
+    return res.status(200).json(result);
+  }
+);
+
+/** PATCH /investigations/:id/hypotheses/:hypothesisId — a human verdict. */
+export const updateHypothesisController = asyncHandler(async (req, res) => {
+  const organizationId = requireOrganization(req.organizationId);
+  const userId = requireUserId(req.user?.id);
+
+  const hypothesis = await updateHypothesisStatus({
+    organizationId,
+    investigationId: readRouteId(req.params.id),
+    hypothesisId: readRouteId(req.params.hypothesisId),
+    userId,
+    payload: req.body,
+  });
+
+  return res.status(200).json({ hypothesis });
+});
 
 /**
  * GET /investigations/:id/timeline

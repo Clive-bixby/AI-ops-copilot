@@ -3,14 +3,17 @@ import { Router } from "express";
 import { authMiddleware } from "../../middleware/auth.middleware.js";
 import { orgMiddleware } from "../../middleware/org.middleware.js";
 import {
+  analyzeInvestigationController,
   collectInvestigationEvidenceController,
   createInvestigationController,
   createInvestigationNoteController,
+  getInvestigationAnalysisController,
   getInvestigationController,
   getInvestigationTimelineController,
   linkInvestigationEvidenceController,
   listInvestigationsController,
   unlinkInvestigationEvidenceController,
+  updateHypothesisController,
   updateInvestigationController,
 } from "./investigation.controller.js";
 
@@ -50,6 +53,29 @@ investigationsRouter.get(
   authMiddleware,
   orgMiddleware,
   getInvestigationTimelineController
+);
+
+// Analysis is synchronous: the engineer waits for the stored result.
+investigationsRouter.post(
+  "/:id/analyze",
+  authMiddleware,
+  orgMiddleware,
+  analyzeInvestigationController
+);
+
+investigationsRouter.get(
+  "/:id/analysis",
+  authMiddleware,
+  orgMiddleware,
+  getInvestigationAnalysisController
+);
+
+// Only the verdict is editable; the model's statement and rationale are not.
+investigationsRouter.patch(
+  "/:id/hypotheses/:hypothesisId",
+  authMiddleware,
+  orgMiddleware,
+  updateHypothesisController
 );
 
 // Notes are activity rows; they are written through their own endpoint so a
