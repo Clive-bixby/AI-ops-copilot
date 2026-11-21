@@ -7,8 +7,8 @@ import {
 } from "../ai/rag.service.js";
 
 /**
- * The analysis call asks Gemini for JSON directly. Prompt text is never stored;
- * only the validated result and the model metadata are persisted.
+ * Analysis and follow-up answers both ask Gemini for JSON directly. Prompt text
+ * is never stored; only the validated result and the model metadata are persisted.
  */
 
 const GEMINI_API_BASE_URL =
@@ -41,7 +41,7 @@ function getApiKey(): string {
   return apiKey.trim();
 }
 
-export async function generateAnalysisJson(prompt: string): Promise<{
+export async function generateJsonResponse(prompt: string): Promise<{
   raw: string;
   model: string;
   generationMs: number;

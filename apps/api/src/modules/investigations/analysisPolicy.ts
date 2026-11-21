@@ -216,10 +216,14 @@ function stripCodeFence(raw: string): string {
     .trim();
 }
 
-/** Map `E1`-style labels back to evidence ids, dropping anything invented. */
-function resolveCitations(
+/**
+ * Map `E1`-style labels back to evidence ids, dropping anything invented.
+ * Shared with follow-up answers, which cite the same labels.
+ */
+export function resolveEvidenceCitations(
   value: unknown,
-  evidenceIds: string[]
+  evidenceIds: string[],
+  maxCitations: number = ANALYSIS_LIMITS.citations
 ): { ids: string[]; dropped: number } {
   if (!Array.isArray(value)) {
     return { ids: [], dropped: 0 };
@@ -244,7 +248,7 @@ function resolveCitations(
     }
 
     ids.push(resolved);
-    if (ids.length >= ANALYSIS_LIMITS.citations) {
+    if (ids.length >= maxCitations) {
       break;
     }
   }
@@ -321,8 +325,11 @@ export function parseAnalysisResponse(
     }
     seenStatements.add(hash);
 
-    const supports = resolveCitations(hypothesis.supports, evidenceIds);
-    const contradicts = resolveCitations(hypothesis.contradicts, evidenceIds);
+    const supports = resolveEvidenceCitations(hypothesis.supports, evidenceIds);
+    const contradicts = resolveEvidenceCitations(
+      hypothesis.contradicts,
+      evidenceIds
+    );
     droppedCitations += supports.dropped + contradicts.dropped;
 
     hypotheses.push({

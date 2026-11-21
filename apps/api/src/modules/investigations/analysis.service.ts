@@ -6,7 +6,7 @@ import {
 import { insertActivity } from "./activity.service.js";
 import {
   ANALYSIS_PROVIDER,
-  generateAnalysisJson,
+  generateJsonResponse,
   getAnalysisModel,
 } from "./analysis.provider.js";
 import {
@@ -44,7 +44,7 @@ import type {
 
 const STALE_PENDING_MINUTES = 10;
 
-type InvestigationRow = {
+export type InvestigationRow = {
   id: string;
   status: string;
   title: string;
@@ -149,7 +149,7 @@ function isUniqueViolation(error: unknown): boolean {
   );
 }
 
-async function loadInvestigation(
+export async function loadInvestigation(
   organizationId: string,
   investigationId: string
 ): Promise<InvestigationRow> {
@@ -521,7 +521,7 @@ export async function analyzeInvestigation(input: {
   let generated: { raw: string; model: string; generationMs: number };
 
   try {
-    generated = await generateAnalysisJson(prompt.prompt);
+    generated = await generateJsonResponse(prompt.prompt);
   } catch (error) {
     await markAnalysisFailed({
       organizationId: input.organizationId,

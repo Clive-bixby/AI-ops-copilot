@@ -12,6 +12,10 @@ import {
   unlinkInvestigationEvidence,
 } from "./evidence.service.js";
 import {
+  askInvestigationQuestion,
+  listInvestigationQuestions,
+} from "./followUp.service.js";
+import {
   addInvestigationNote,
   createInvestigation,
   getInvestigationDetail,
@@ -177,6 +181,42 @@ export const analyzeInvestigationController = asyncHandler(
     });
 
     return res.status(200).json(result);
+  }
+);
+
+/**
+ * POST /investigations/:id/questions
+ *
+ * Answers from this investigation's evidence and analysis only, with citations
+ * back to stored evidence. The exchange is stored as a follow-up activity row.
+ */
+export const askInvestigationQuestionController = asyncHandler(
+  async (req, res) => {
+    const organizationId = requireOrganization(req.organizationId);
+    const userId = requireUserId(req.user?.id);
+
+    const answer = await askInvestigationQuestion({
+      organizationId,
+      investigationId: readRouteId(req.params.id),
+      userId,
+      payload: req.body,
+    });
+
+    return res.status(200).json(answer);
+  }
+);
+
+/** GET /investigations/:id/questions — the exchange, oldest first. */
+export const listInvestigationQuestionsController = asyncHandler(
+  async (req, res) => {
+    const organizationId = requireOrganization(req.organizationId);
+
+    const questions = await listInvestigationQuestions(
+      organizationId,
+      readRouteId(req.params.id)
+    );
+
+    return res.status(200).json({ questions });
   }
 );
 

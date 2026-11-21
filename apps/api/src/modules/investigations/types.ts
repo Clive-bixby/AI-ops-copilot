@@ -173,6 +173,31 @@ export type InvestigationAnalysisResult = {
   hypotheses: AnalysisHypothesis[];
 };
 
+export type FollowUpConfidence = "high" | "medium" | "low";
+
+export type FollowUpCitation = {
+  evidenceId: string;
+  sourceType: InvestigationSourceType;
+  sourceTitle: string;
+  relevance: EvidenceRelevance;
+  sourceCreatedAt: string | null;
+};
+
+/** One question and the answer it received, stored as a `follow_up` activity row. */
+export type FollowUpAnswer = {
+  activityId: string;
+  question: string;
+  answer: string;
+  confidence: FollowUpConfidence;
+  insufficientContext: boolean;
+  citations: FollowUpCitation[];
+  analysisId: string | null;
+  model: string;
+  provider: string;
+  generationMs: number;
+  createdAt: string;
+};
+
 export type TimelineEventKind = InvestigationActivityType | "evidence_source";
 
 /**

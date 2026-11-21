@@ -4,6 +4,7 @@ import { authMiddleware } from "../../middleware/auth.middleware.js";
 import { orgMiddleware } from "../../middleware/org.middleware.js";
 import {
   analyzeInvestigationController,
+  askInvestigationQuestionController,
   collectInvestigationEvidenceController,
   createInvestigationController,
   createInvestigationNoteController,
@@ -12,6 +13,7 @@ import {
   getInvestigationTimelineController,
   linkInvestigationEvidenceController,
   listInvestigationsController,
+  listInvestigationQuestionsController,
   unlinkInvestigationEvidenceController,
   updateHypothesisController,
   updateInvestigationController,
@@ -76,6 +78,21 @@ investigationsRouter.patch(
   authMiddleware,
   orgMiddleware,
   updateHypothesisController
+);
+
+// Follow-up questions are answered from this investigation only.
+investigationsRouter.post(
+  "/:id/questions",
+  authMiddleware,
+  orgMiddleware,
+  askInvestigationQuestionController
+);
+
+investigationsRouter.get(
+  "/:id/questions",
+  authMiddleware,
+  orgMiddleware,
+  listInvestigationQuestionsController
 );
 
 // Notes are activity rows; they are written through their own endpoint so a
