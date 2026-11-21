@@ -119,3 +119,56 @@ export type InvestigationList = {
   limit: number;
   offset: number;
 };
+
+export type TimelineEventKind = InvestigationActivityType | "evidence_source";
+
+/**
+ * Deterministic labels that explain why an event sits where it does on the
+ * timeline. They come from rules, never from a model.
+ */
+export type TimelineCorrelation =
+  | "signature_match"
+  | "same_service"
+  | "in_window"
+  | "before_window"
+  | "after_window"
+  | "time_cluster";
+
+export type TimelineEvent = {
+  id: string;
+  kind: TimelineEventKind;
+  at: string;
+  /**
+   * True when `at` is the source's own timestamp; false when the source has none
+   * and the moment the evidence was recorded stands in for it.
+   */
+  atSourceTime: boolean;
+  title: string;
+  detail: string | null;
+  activityId: string | null;
+  evidenceId: string | null;
+  sourceType: InvestigationSourceType | null;
+  sourceId: string | null;
+  relevance: EvidenceRelevance | null;
+  actorEmail: string | null;
+  correlations: TimelineCorrelation[];
+};
+
+export type InvestigationTimeline = {
+  investigationId: string;
+  windowStart: string | null;
+  windowEnd: string | null;
+  generatedAt: string;
+  events: TimelineEvent[];
+  summary: {
+    total: number;
+    /** True when older events were dropped to respect the event cap. */
+    clipped: boolean;
+    /** Evidence with no source timestamp, placed at its recorded time. */
+    undated: number;
+    evidence: number;
+    activity: number;
+    bySourceType: Record<InvestigationSourceType, number>;
+    correlations: Record<TimelineCorrelation, number>;
+  };
+};

@@ -7,6 +7,7 @@ import {
   createInvestigationController,
   createInvestigationNoteController,
   getInvestigationController,
+  getInvestigationTimelineController,
   linkInvestigationEvidenceController,
   listInvestigationsController,
   unlinkInvestigationEvidenceController,
@@ -41,6 +42,14 @@ investigationsRouter.patch(
   authMiddleware,
   orgMiddleware,
   updateInvestigationController
+);
+
+// A read-only projection of the activity log and the evidence, in time order.
+investigationsRouter.get(
+  "/:id/timeline",
+  authMiddleware,
+  orgMiddleware,
+  getInvestigationTimelineController
 );
 
 // Notes are activity rows; they are written through their own endpoint so a

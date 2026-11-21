@@ -109,7 +109,8 @@ function mapInvestigation(row: InvestigationRow): Investigation {
 
 export async function getInvestigationDetail(
   organizationId: string,
-  rawInvestigationId: string
+  rawInvestigationId: string,
+  activityLimit = 100
 ): Promise<InvestigationDetail> {
   const investigationId = normalizeInvestigationId(rawInvestigationId);
 
@@ -124,7 +125,7 @@ export async function getInvestigationDetail(
   }
 
   const [activity, evidence] = await Promise.all([
-    listActivity(organizationId, investigationId),
+    listActivity(organizationId, investigationId, activityLimit),
     listEvidenceForInvestigation(organizationId, investigationId),
   ]);
 

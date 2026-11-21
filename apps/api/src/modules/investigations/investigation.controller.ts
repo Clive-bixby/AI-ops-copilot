@@ -13,6 +13,7 @@ import {
   listInvestigations,
   updateInvestigation,
 } from "./investigation.service.js";
+import { getInvestigationTimeline } from "./timeline.service.js";
 import type { EvidenceCollectionSummary } from "./types.js";
 
 function requireOrganization(organizationId: string | undefined): string {
@@ -149,6 +150,25 @@ export const createInvestigationNoteController = asyncHandler(
     });
 
     return res.status(201).json({ activity });
+  }
+);
+
+/**
+ * GET /investigations/:id/timeline
+ *
+ * Activity and evidence merged into one chronological list, with deterministic
+ * correlation labels. Derived on read, so it cannot drift from the evidence.
+ */
+export const getInvestigationTimelineController = asyncHandler(
+  async (req, res) => {
+    const organizationId = requireOrganization(req.organizationId);
+
+    const timeline = await getInvestigationTimeline(
+      organizationId,
+      readRouteId(req.params.id)
+    );
+
+    return res.status(200).json(timeline);
   }
 );
 
