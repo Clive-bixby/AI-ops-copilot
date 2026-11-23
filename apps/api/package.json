@@ -7,6 +7,7 @@
   "scripts": {
     "test": "tsx --test \"src/**/*.test.ts\"",
     "test:integration": "tsx --test --test-concurrency=1 \"src/**/*.itest.ts\"",
+    "test:e2e": "node e2e/smoke.mjs",
     "dev": "tsx watch src/index.ts",
     "start": "tsx src/index.ts",
     "worker": "tsx src/workers/ingestion.worker.ts",

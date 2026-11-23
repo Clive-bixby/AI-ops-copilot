@@ -148,8 +148,12 @@ npm run typecheck      # tsc --noEmit
 npm test               # node:test unit tests, no database needed
 ```
 
-`.github/workflows/ci.yml` runs the API typecheck and unit tests plus the web
-typecheck and production build on every push to `main` and every pull request.
+`.github/workflows/ci.yml` runs on every push to `main` and every pull request:
+the API typecheck and unit tests, the integration suite against pgvector, the
+retrieval evaluation, the web typecheck and build, a build of both Docker images,
+a dependency audit, and an end-to-end check that starts the real compose stack
+and ingests a document through the worker. See
+[docs/deployment.md](docs/deployment.md#15-what-ci-checks-before-a-change-reaches-a-deployment).
 
 ## Retrieval
 

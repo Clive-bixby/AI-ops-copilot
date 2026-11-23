@@ -512,3 +512,67 @@ three places:
 The worker logs `worker.drained` with the remaining queue counts on shutdown, so
 "the queue was empty when this stopped" is a recorded fact rather than an
 assumption.
+
+## 15. What CI checks before a change reaches a deployment
+
+`.github/workflows/ci.yml` runs six jobs on every pull request and every push to
+`main`. Each one exists because a failure it catches is invisible to the others.
+
+| Job | Catches |
+| --- | --- |
+| API typecheck and unit tests | Logic regressions, without needing a database |
+| API integration tests | SQL, migrations and tenant scoping against real pgvector |
+| Investigation evaluation | Retrieval quality regressions (recorded vectors, so no model and no key) |
+| Web typecheck and build | Front-end type errors and a build that no longer produces `dist` |
+| Docker images | A Dockerfile whose `COPY`, lockfile or native dependency no longer resolves |
+| End-to-end | The deployed topology: two processes in one container, queue, worker, static web build |
+
+### The dependency audit gate
+
+`audit` fails on moderate or worse, with a different scope per app:
+
+- **API** -- the whole tree. The image installs dev dependencies because `tsx` is
+  what runs the service, so "dev" dependencies are installed in production here;
+  gating only the production tree would gate the tree that does not ship.
+- **Web** -- `--omit=dev`. The runtime image contains the build output and
+  `server.mjs`, no `node_modules` at all, so only the build-time tree can ship
+  anything.
+
+One advisory is deliberately not gated: Vite 5's development-server path
+traversal, which needs a major upgrade to Vite 8. It is a development server that
+is never deployed (the image serves `dist` through `server.mjs`), so the upgrade
+is a front-end chore rather than a deployment risk. Everything else is clean at
+moderate and above; do not lower the threshold to make a run green, and do not
+raise it without writing down what is being accepted.
+
+The lockfiles are committed and `npm ci` is used everywhere, so the audit sees
+exactly what the images install. `npm audit fix` cleared the direct dependency
+advisories (axios, multer, proxy-addr, bullmq) without a breaking change; a future
+advisory that needs a major version is a decision, not an automatic bump.
+
+### The end-to-end check
+
+`e2e` starts `docker-compose.single.yml` -- the real deployment topology -- with a
+`docker-compose.e2e.yml` overlay that adds a deterministic embedding stub, then
+runs `apps/api/e2e/smoke.mjs`. The script signs up, signs in, uploads a document,
+waits for the worker to index it, searches for it, and checks that anonymous
+requests get 401 and a foreign tenant gets 403.
+
+The embedding stub returns the same unit vector for every input, so similarity is
+always 1.0. That is intentional: the check proves the pipeline (parse, chunk,
+embed, store, rank) works, not that embeddings are good -- the evaluation job
+measures retrieval quality. It also means the check needs no model download, no
+API key and no network beyond the compose project.
+
+To run it locally:
+
+```bash
+JWT_SECRET=$(openssl rand -hex 32) \
+  docker compose -f docker-compose.single.yml -f docker-compose.e2e.yml up -d --build
+node apps/api/e2e/smoke.mjs
+docker compose -f docker-compose.single.yml -f docker-compose.e2e.yml down -v
+```
+
+`E2E_API_URL` and `E2E_WEB_URL` point the script at another host or port. When it
+fails, the CI job prints the last 300 lines from every container before tearing
+the stack down.

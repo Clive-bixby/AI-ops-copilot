@@ -1,0 +1,46 @@
+# Overlay that makes the single-container stack ingestion-complete for the
+# end-to-end check.
+#
+# The stack in `docker-compose.single.yml` is the real deployment topology. What
+# it cannot do on a CI runner is embed: the default provider is a local Ollama,
+# and the fixture provider can only replay texts that were recorded ahead of
+# time. The E2E uploads a new file, so this overlay adds a stub that speaks the
+# OpenAI embeddings API -- the same interface a hosted provider uses -- and points
+# `EMBEDDING_PROVIDER` at it. Nothing else changes.
+#
+#   JWT_SECRET=$(openssl rand -hex 32) \
+#     docker compose -f docker-compose.single.yml -f docker-compose.e2e.yml up -d --build
+#   node apps/api/e2e/smoke.mjs
+#   docker compose -f docker-compose.single.yml -f docker-compose.e2e.yml down -v
+#
+# This file is for tests only. Do not add it to a deployment.
+
+services:
+  embed-stub:
+    image: node:22-bookworm-slim
+    command: ["node", "/e2e/embedding-stub.mjs"]
+    volumes:
+      - ./apps/api/e2e:/e2e:ro
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:8080/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: "no"
+
+  app:
+    environment:
+      EMBEDDING_PROVIDER: openai-compatible
+      EMBEDDING_BASE_URL: http://embed-stub:8080/v1
+      EMBEDDING_MODEL: e2e-stub
+      EMBEDDING_DIMENSIONS: "768"
+      EMBEDDING_API_KEY: ""
+    depends_on:
+      embed-stub:
+        condition: service_healthy

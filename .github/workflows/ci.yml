@@ -27,6 +27,38 @@ jobs:
       - run: npm run typecheck
       - run: npm test
 
+  audit:
+    name: Dependency audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            apps/api/package-lock.json
+            apps/web/package-lock.json
+      # The API image installs dev dependencies too -- `tsx` is what runs the
+      # service -- so its whole tree is installed in production and the whole
+      # tree is gated. Moderate is the threshold: low-severity advisories with no
+      # upstream fix would otherwise fail every run and train people to ignore
+      # the job.
+      - name: API dependencies (moderate and above)
+        working-directory: apps/api
+        run: |
+          npm ci --no-audit --no-fund
+          npm audit --audit-level=moderate
+      # The web image ships only the build output and `server.mjs`; its runtime
+      # stage has no node_modules. So the tree that matters is production-only.
+      # The one remaining advisory is in Vite's development server and needs a
+      # major upgrade to Vite 8 -- it is not in the image and not gated here.
+      - name: Web dependencies (production tree, moderate and above)
+        working-directory: apps/web
+        run: |
+          npm ci --no-audit --no-fund
+          npm audit --omit=dev --audit-level=moderate
+
   api-integration:
     name: API (integration tests, PostgreSQL)
     runs-on: ubuntu-latest
@@ -136,3 +168,46 @@ jobs:
           cache-dependency-path: apps/web/package-lock.json
       - run: npm ci
       - run: npm run build
+
+  images:
+    name: Docker images (build)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      # Building the images is the only check that the Dockerfiles still resolve:
+      # a missing file in a COPY, a lockfile that disagrees with package.json, or
+      # a dependency that needs a build tool the slim base image lacks all pass
+      # `npm ci` locally and fail here.
+      - name: Build API image
+        run: docker build --tag opspilot-api:ci apps/api
+      - name: Build web image
+        run: docker build --tag opspilot-web:ci --build-arg VITE_API_URL=http://localhost:3000 apps/web
+
+  e2e:
+    name: End-to-end (compose stack, both images)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      # `docker-compose.single.yml` requires this and passes it to the container,
+      # where NODE_ENV=production rejects anything shorter than 32 characters.
+      # It signs tokens for a throwaway stack that is torn down below.
+      JWT_SECRET: e2e-only-secret-0123456789abcdef0123456789abcdef
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      # The real topology: one container running the API and the worker, plus
+      # Postgres and Redis. The overlay adds a deterministic embedding stub so a
+      # freshly uploaded file can be indexed without a model.
+      - name: Build and start the stack
+        run: docker compose -f docker-compose.single.yml -f docker-compose.e2e.yml up -d --build
+      - name: Run the end-to-end check
+        run: node apps/api/e2e/smoke.mjs
+      - name: Container logs
+        if: failure()
+        run: docker compose -f docker-compose.single.yml -f docker-compose.e2e.yml logs --no-color --tail=300
+      - name: Stop the stack
+        if: always()
+        run: docker compose -f docker-compose.single.yml -f docker-compose.e2e.yml down -v
