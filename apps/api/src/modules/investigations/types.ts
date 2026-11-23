@@ -20,6 +20,9 @@ export type Investigation = {
   /** NULL means every source type is searched. */
   sourceTypes: InvestigationSourceType[] | null;
   resolutionSummary: string | null;
+  /** NULL means unassigned. Never inferred from the creator. */
+  ownerUserId: string | null;
+  ownerEmail: string | null;
   createdBy: string;
   createdByEmail: string | null;
   resolvedAt: string | null;
@@ -31,8 +34,10 @@ export type Investigation = {
 export type InvestigationActivityType =
   | "created"
   | "note"
+  | "comment"
   | "status_change"
   | "severity_change"
+  | "owner_change"
   | "evidence_added"
   | "evidence_removed"
   | "hypothesis_created"

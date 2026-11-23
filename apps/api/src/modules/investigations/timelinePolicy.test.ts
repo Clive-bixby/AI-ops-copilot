@@ -27,6 +27,8 @@ const INVESTIGATION: Investigation = {
   windowEnd: "2026-11-21T10:00:00.000Z",
   sourceTypes: null,
   resolutionSummary: null,
+  ownerUserId: null,
+  ownerEmail: null,
   createdBy: "33333333-3333-3333-3333-333333333333",
   createdByEmail: "engineer@example.com",
   resolvedAt: null,

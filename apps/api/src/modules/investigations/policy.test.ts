@@ -14,6 +14,7 @@ import {
   validateCreateInvestigation,
   validateListInvestigationsQuery,
   validateNoteBody,
+  validateCommentBody,
   validateUpdateInvestigation,
 } from "./policy.js";
 import type { LifecycleState } from "./policy.js";
@@ -555,6 +556,97 @@ describe("validateNoteBody", () => {
     ]) {
       assert.throws(() => validateNoteBody(payload), InvestigationValidationError);
     }
+  });
+});
+
+describe("validateCommentBody", () => {
+  it("trims a comment", () => {
+    assert.equal(
+      validateCommentBody({ body: "  Is the pool limit still 100?  " }),
+      "Is the pool limit still 100?"
+    );
+  });
+
+  it("rejects empty, overlong and non-string comments", () => {
+    for (const payload of [
+      {},
+      { body: "   " },
+      { body: 42 },
+      { body: "x".repeat(4001) },
+      null,
+    ]) {
+      assert.throws(
+        () => validateCommentBody(payload),
+        InvestigationValidationError
+      );
+    }
+  });
+});
+
+describe("investigation ownership", () => {
+  const OWNER_ID = "8c1f2b3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d";
+
+  it("defaults a created investigation to unassigned", () => {
+    assert.equal(validateCreateInvestigation(createPayload()).ownerUserId, null);
+  });
+
+  it("accepts an owner id and treats null or empty as unassigned", () => {
+    assert.equal(
+      validateCreateInvestigation(createPayload({ ownerUserId: OWNER_ID })).ownerUserId,
+      OWNER_ID
+    );
+    assert.equal(
+      validateCreateInvestigation(createPayload({ ownerUserId: null })).ownerUserId,
+      null
+    );
+    assert.equal(
+      validateCreateInvestigation(createPayload({ ownerUserId: "" })).ownerUserId,
+      null
+    );
+  });
+
+  it("rejects an owner id that is not a uuid", () => {
+    for (const ownerUserId of ["me", "someone@example.com", 42, true]) {
+      assert.throws(
+        () => validateCreateInvestigation(createPayload({ ownerUserId })),
+        InvestigationValidationError
+      );
+    }
+  });
+
+  it("lets an update assign or clear the owner", () => {
+    assert.equal(
+      validateUpdateInvestigation({ ownerUserId: OWNER_ID }).ownerUserId,
+      OWNER_ID
+    );
+    assert.equal(validateUpdateInvestigation({ ownerUserId: null }).ownerUserId, null);
+    assert.throws(
+      () => validateUpdateInvestigation({ ownerUserId: "not-a-uuid" }),
+      InvestigationValidationError
+    );
+  });
+
+  it("parses the owner filter tokens", () => {
+    assert.deepEqual(validateListInvestigationsQuery({ owner: "me" }).owner, {
+      kind: "me",
+    });
+    assert.deepEqual(validateListInvestigationsQuery({ owner: "unassigned" }).owner, {
+      kind: "unassigned",
+    });
+    assert.deepEqual(validateListInvestigationsQuery({ owner: OWNER_ID }).owner, {
+      kind: "user",
+      userId: OWNER_ID,
+    });
+    assert.equal(validateListInvestigationsQuery({ owner: " " }).owner, undefined);
+  });
+
+  it("rejects an owner filter that is neither a token nor a uuid", () => {
+    assert.throws(
+      () => validateListInvestigationsQuery({ owner: "everyone" }),
+      (error: unknown) =>
+        error instanceof InvestigationValidationError &&
+        error.message === "owner must be 'me', 'unassigned' or a user id"
+    );
   });
 });
 

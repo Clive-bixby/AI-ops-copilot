@@ -32,8 +32,10 @@ const ACTIVITY_TITLES: Record<
 > = {
   created: "Investigation created",
   note: "Note added",
+  comment: "Comment added",
   status_change: "Status changed",
   severity_change: "Severity changed",
+  owner_change: "Owner changed",
   evidence_added: "Evidence added",
   evidence_removed: "Evidence removed",
   hypothesis_created: "Hypothesis created",

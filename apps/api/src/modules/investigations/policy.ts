@@ -57,14 +57,14 @@ export const INVESTIGATION_LIMITS = {
 
 // Any UUID version: the id comes from the client, and a malformed one is treated
 // as "not found" rather than as a validation detail.
-const UUID_PATTERN =
+export const UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-function isRecord(value: unknown): value is Record<string, unknown> {
+export function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function requireRecord(payload: unknown): Record<string, unknown> {
+export function requireRecord(payload: unknown): Record<string, unknown> {
   if (!isRecord(payload)) {
     throw new InvestigationValidationError("Request body must be an object");
   }
@@ -72,11 +72,11 @@ function requireRecord(payload: unknown): Record<string, unknown> {
   return payload;
 }
 
-function hasKey(record: Record<string, unknown>, key: string): boolean {
+export function hasKey(record: Record<string, unknown>, key: string): boolean {
   return Object.prototype.hasOwnProperty.call(record, key);
 }
 
-function readRequiredString(
+export function readRequiredString(
   value: unknown,
   label: string,
   min: number,
@@ -96,7 +96,7 @@ function readRequiredString(
   return trimmed;
 }
 
-function readOptionalText(
+export function readOptionalText(
   value: unknown,
   label: string,
   max: number
@@ -123,7 +123,7 @@ function readOptionalText(
   return trimmed;
 }
 
-function readEnum<T extends string>(
+export function readEnum<T extends string>(
   value: unknown,
   label: string,
   allowed: readonly T[]
@@ -140,7 +140,7 @@ function readEnum<T extends string>(
   return value as T;
 }
 
-function readOptionalTimestamp(value: unknown, label: string): string | null {
+export function readOptionalTimestamp(value: unknown, label: string): string | null {
   if (value === undefined || value === null || value === "") {
     return null;
   }
@@ -161,7 +161,7 @@ function readOptionalTimestamp(value: unknown, label: string): string | null {
   return parsed.toISOString();
 }
 
-function readRequiredTimestamp(value: unknown, label: string): string {
+export function readRequiredTimestamp(value: unknown, label: string): string {
   const parsed = readOptionalTimestamp(value, label);
   if (parsed === null) {
     throw new InvestigationValidationError(
@@ -170,6 +170,24 @@ function readRequiredTimestamp(value: unknown, label: string): string {
   }
 
   return parsed;
+}
+
+/**
+ * A user id supplied by a client. `null` and an empty string clear the field, so
+ * a form that always sends `ownerUserId` can unassign without a special case.
+ * The format is checked here; membership is checked against the organization by
+ * the service.
+ */
+export function readOptionalUuid(value: unknown, label: string): string | null {
+  if (value === undefined || value === null || value === "") {
+    return null;
+  }
+
+  if (typeof value !== "string" || !UUID_PATTERN.test(value.trim())) {
+    throw new InvestigationValidationError(`${label} must be a valid user id`);
+  }
+
+  return value.trim();
 }
 
 /**
@@ -233,6 +251,11 @@ export type CreateInvestigationInput = {
   windowEnd: string | null;
   sourceTypes: InvestigationSourceType[] | null;
   /**
+   * The member responsible for the investigation. Omitted means unassigned; the
+   * backend never defaults ownership to the creator.
+   */
+  ownerUserId: string | null;
+  /**
    * Accepted on create so a client can ask for evidence collection in the same
    * action. Evidence collection itself lives in the evidence service.
    */
@@ -273,6 +296,7 @@ export function validateCreateInvestigation(
   const windowStart = readOptionalTimestamp(record.windowStart, "windowStart");
   const windowEnd = readOptionalTimestamp(record.windowEnd, "windowEnd");
   const sourceTypes = validateSourceTypes(record.sourceTypes);
+  const ownerUserId = readOptionalUuid(record.ownerUserId, "ownerUserId");
 
   if (record.collectEvidence !== undefined && typeof record.collectEvidence !== "boolean") {
     throw new InvestigationValidationError(
@@ -292,6 +316,7 @@ export function validateCreateInvestigation(
     windowStart,
     windowEnd,
     sourceTypes,
+    ownerUserId,
     collectEvidence,
   };
 }
@@ -305,6 +330,8 @@ export type UpdateInvestigationInput = {
   windowStart?: string | null;
   windowEnd?: string | null;
   sourceTypes?: InvestigationSourceType[] | null;
+  /** `null` unassigns; an id assigns a member. */
+  ownerUserId?: string | null;
   status?: InvestigationStatus;
   resolutionSummary?: string | null;
   expectedUpdatedAt?: string;
@@ -376,6 +403,11 @@ export function validateUpdateInvestigation(
 
   if (hasKey(record, "sourceTypes")) {
     update.sourceTypes = validateSourceTypes(record.sourceTypes);
+    changes += 1;
+  }
+
+  if (hasKey(record, "ownerUserId")) {
+    update.ownerUserId = readOptionalUuid(record.ownerUserId, "ownerUserId");
     changes += 1;
   }
 
@@ -580,16 +612,26 @@ export function applyStatusChange(input: {
   };
 }
 
+/**
+ * An owner filter token. `me` is resolved to the authenticated user by the
+ * service, so the policy stays independent of request context.
+ */
+export type InvestigationOwnerFilter =
+  | { kind: "me" }
+  | { kind: "unassigned" }
+  | { kind: "user"; userId: string };
+
 export type ListInvestigationsQuery = {
   status?: InvestigationStatus;
   severity?: InvestigationSeverity;
   service?: string;
   q?: string;
+  owner?: InvestigationOwnerFilter;
   limit: number;
   offset: number;
 };
 
-function readQueryValue(
+export function readQueryValue(
   value: unknown,
   label: string
 ): string | undefined {
@@ -616,7 +658,7 @@ function readQueryValue(
   return value;
 }
 
-function readBoundedInteger(
+export function readBoundedInteger(
   value: string,
   label: string,
   min: number,
@@ -636,6 +678,24 @@ function readBoundedInteger(
   }
 
   return parsed;
+}
+
+function parseOwnerFilter(value: string): InvestigationOwnerFilter {
+  if (value === "me") {
+    return { kind: "me" };
+  }
+
+  if (value === "unassigned") {
+    return { kind: "unassigned" };
+  }
+
+  if (UUID_PATTERN.test(value)) {
+    return { kind: "user", userId: value };
+  }
+
+  throw new InvestigationValidationError(
+    "owner must be 'me', 'unassigned' or a user id"
+  );
 }
 
 export function validateListInvestigationsQuery(
@@ -679,6 +739,11 @@ export function validateListInvestigationsQuery(
     result.q = trimmed;
   }
 
+  const owner = readQueryValue(record.owner, "owner");
+  if (owner !== undefined && owner.trim() !== "") {
+    result.owner = parseOwnerFilter(owner.trim());
+  }
+
   const limit = readQueryValue(record.limit, "limit");
   if (limit !== undefined && limit !== "") {
     result.limit = readBoundedInteger(
@@ -708,6 +773,22 @@ export function validateNoteBody(payload: unknown): string {
   return readRequiredString(
     record.body,
     "Note",
+    INVESTIGATION_LIMITS.noteMin,
+    INVESTIGATION_LIMITS.noteMax
+  );
+}
+
+/**
+ * A comment is discussion, a note is investigation record. They share the same
+ * activity stream and the same length ceiling, so they share the validator
+ * bounds; only the user-facing label differs.
+ */
+export function validateCommentBody(payload: unknown): string {
+  const record = requireRecord(payload);
+
+  return readRequiredString(
+    record.body,
+    "Comment",
     INVESTIGATION_LIMITS.noteMin,
     INVESTIGATION_LIMITS.noteMax
   );

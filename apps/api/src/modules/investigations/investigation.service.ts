@@ -6,6 +6,7 @@ import {
   InvestigationConflictError,
   InvestigationNotFoundError,
 } from "./errors.js";
+import { assertOrganizationMember } from "../organization/organization.service.js";
 import {
   applyStatusChange,
   assertWindowOrder,
@@ -13,6 +14,7 @@ import {
   validateCreateInvestigation,
   validateListInvestigationsQuery,
   validateNoteBody,
+  validateCommentBody,
   validateUpdateInvestigation,
 } from "./policy.js";
 import type {
@@ -40,6 +42,8 @@ type InvestigationRow = {
   window_end: Date | string | null;
   source_types: string[] | null;
   resolution_summary: string | null;
+  owner_user_id: string | null;
+  owner_email: string | null;
   created_by: string;
   created_by_email: string | null;
   resolved_at: Date | string | null;
@@ -66,6 +70,8 @@ const INVESTIGATION_SELECT = `
     i.window_end,
     i.source_types,
     i.resolution_summary,
+    i.owner_user_id,
+    owner.email AS owner_email,
     i.created_by,
     u.email AS created_by_email,
     i.resolved_at,
@@ -74,6 +80,7 @@ const INVESTIGATION_SELECT = `
     i.updated_at
   FROM investigations i
   LEFT JOIN users u ON u.id = i.created_by
+  LEFT JOIN users owner ON owner.id = i.owner_user_id
 `;
 
 function toIso(value: Date | string | null): string | null {
@@ -98,6 +105,8 @@ function mapInvestigation(row: InvestigationRow): Investigation {
     windowEnd: toIso(row.window_end),
     sourceTypes: (row.source_types as InvestigationSourceType[] | null) ?? null,
     resolutionSummary: row.resolution_summary,
+    ownerUserId: row.owner_user_id,
+    ownerEmail: row.owner_email,
     createdBy: row.created_by,
     createdByEmail: row.created_by_email,
     resolvedAt: toIso(row.resolved_at),
@@ -138,6 +147,13 @@ export async function createInvestigation(input: {
   payload: unknown;
 }): Promise<{ detail: InvestigationDetail; collectEvidenceRequested: boolean }> {
   const parsed = validateCreateInvestigation(input.payload);
+
+  // Validate the assignee before opening a transaction so a bad owner id does
+  // not leave a half-written investigation behind.
+  if (parsed.ownerUserId !== null) {
+    await assertOrganizationMember(input.organizationId, parsed.ownerUserId);
+  }
+
   const client = await pool.connect();
 
   let investigationId: string | null = null;
@@ -148,9 +164,9 @@ export async function createInvestigation(input: {
     const inserted = await client.query<{ id: string }>(
       `INSERT INTO investigations (
          organization_id, title, description, severity, service, error_signature,
-         window_start, window_end, source_types, created_by
+         window_start, window_end, source_types, owner_user_id, created_by
        )
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::text[], $10)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::text[], $10, $11)
        RETURNING id`,
       [
         input.organizationId,
@@ -162,6 +178,7 @@ export async function createInvestigation(input: {
         parsed.windowStart,
         parsed.windowEnd,
         parsed.sourceTypes,
+        parsed.ownerUserId,
         input.userId,
       ]
     );
@@ -186,6 +203,7 @@ export async function createInvestigation(input: {
         service: parsed.service,
         windowStart: parsed.windowStart,
         windowEnd: parsed.windowEnd,
+        ownerUserId: parsed.ownerUserId,
       },
     });
 
@@ -219,9 +237,23 @@ export async function createInvestigation(input: {
 
 export async function listInvestigations(input: {
   organizationId: string;
+  userId: string;
   query: unknown;
 }): Promise<InvestigationList> {
   const filters = validateListInvestigationsQuery(input.query);
+
+  // `me` is resolved here so the policy stays free of request context. The two
+  // owner parameters distinguish "specific member" from "unassigned".
+  let ownerUserId: string | null = null;
+  let unassignedOnly = false;
+
+  if (filters.owner?.kind === "me") {
+    ownerUserId = input.userId;
+  } else if (filters.owner?.kind === "unassigned") {
+    unassignedOnly = true;
+  } else if (filters.owner?.kind === "user") {
+    ownerUserId = filters.owner.userId;
+  }
 
   const result = await pool.query<InvestigationListRow>(
     `SELECT
@@ -237,6 +269,8 @@ export async function listInvestigations(input: {
        i.window_end,
        i.source_types,
        i.resolution_summary,
+       i.owner_user_id,
+       owner.email AS owner_email,
        i.created_by,
        u.email AS created_by_email,
        i.resolved_at,
@@ -246,6 +280,7 @@ export async function listInvestigations(input: {
        COUNT(*) OVER() AS total_count
      FROM investigations i
      LEFT JOIN users u ON u.id = i.created_by
+     LEFT JOIN users owner ON owner.id = i.owner_user_id
      WHERE i.organization_id = $1
        AND ($2::text IS NULL OR i.status = $2)
        AND ($3::text IS NULL OR i.severity = $3)
@@ -255,14 +290,18 @@ export async function listInvestigations(input: {
          OR i.title ILIKE $5 ESCAPE '\\'
          OR i.description ILIKE $5 ESCAPE '\\'
        )
+       AND ($6::uuid IS NULL OR i.owner_user_id = $6)
+       AND ($7::boolean = FALSE OR i.owner_user_id IS NULL)
      ORDER BY i.updated_at DESC, i.id DESC
-     LIMIT $6 OFFSET $7`,
+     LIMIT $8 OFFSET $9`,
     [
       input.organizationId,
       filters.status ?? null,
       filters.severity ?? null,
       filters.service ?? null,
       filters.q === undefined ? null : `%${escapeLike(filters.q)}%`,
+      ownerUserId,
+      unassignedOnly,
       filters.limit,
       filters.offset,
     ]
@@ -295,6 +334,7 @@ const METADATA_FIELDS = [
   "windowEnd",
   "sourceTypes",
   "resolutionSummary",
+  "ownerUserId",
 ] as const;
 
 export async function updateInvestigation(input: {
@@ -367,6 +407,25 @@ export async function updateInvestigation(input: {
         ? (row.source_types as InvestigationSourceType[] | null)
         : update.sourceTypes;
 
+    const ownerUserId =
+      update.ownerUserId === undefined ? row.owner_user_id : update.ownerUserId;
+    const ownerChanged =
+      update.ownerUserId !== undefined &&
+      update.ownerUserId !== row.owner_user_id;
+    let ownerEmail = row.owner_email;
+
+    if (ownerChanged) {
+      if (ownerUserId === null) {
+        ownerEmail = null;
+      } else {
+        // The composite foreign key is the backstop; this gives the caller a
+        // clear validation error and resolves the email for the activity row.
+        ownerEmail = (
+          await assertOrganizationMember(input.organizationId, ownerUserId)
+        ).email;
+      }
+    }
+
     assertWindowOrder(windowStart, windowEnd);
 
     const lifecycle = applyStatusChange({
@@ -400,6 +459,7 @@ export async function updateInvestigation(input: {
            resolution_summary = $12,
            resolved_at = $13,
            closed_at = $14,
+           owner_user_id = $15,
            updated_at = NOW()
        WHERE id = $1 AND organization_id = $2`,
       [
@@ -417,6 +477,7 @@ export async function updateInvestigation(input: {
         lifecycle.state.resolutionSummary,
         lifecycle.state.resolvedAt,
         lifecycle.state.closedAt,
+        ownerUserId,
       ]
     );
 
@@ -447,6 +508,25 @@ export async function updateInvestigation(input: {
       });
     }
 
+    if (ownerChanged) {
+      await insertActivity(client, {
+        investigationId,
+        organizationId: input.organizationId,
+        type: "owner_change",
+        actorUserId: input.userId,
+        body:
+          ownerUserId === null
+            ? "Investigation unassigned"
+            : `Owner assigned to ${ownerEmail ?? ownerUserId}`,
+        metadata: {
+          fromUserId: row.owner_user_id,
+          fromEmail: row.owner_email,
+          toUserId: ownerUserId,
+          toEmail: ownerEmail,
+        },
+      });
+    }
+
     await client.query("COMMIT");
   } catch (error) {
     await client.query("ROLLBACK").catch(() => undefined);
@@ -465,14 +545,19 @@ export async function updateInvestigation(input: {
   return getInvestigationDetail(input.organizationId, investigationId);
 }
 
-export async function addInvestigationNote(input: {
+/**
+ * Notes and comments are both attributed, append-only discussion entries in the
+ * activity stream. They share one write path so a future change to attribution
+ * or ordering cannot apply to only one of them.
+ */
+async function addInvestigationEntry(input: {
   organizationId: string;
   investigationId: string;
   userId: string;
-  payload: unknown;
+  type: "note" | "comment";
+  body: string;
 }): Promise<InvestigationActivity> {
   const investigationId = normalizeInvestigationId(input.investigationId);
-  const body = validateNoteBody(input.payload);
   const client = await pool.connect();
 
   try {
@@ -492,13 +577,14 @@ export async function addInvestigationNote(input: {
     const activity = await insertActivity(client, {
       investigationId,
       organizationId: input.organizationId,
-      type: "note",
+      type: input.type,
       actorUserId: input.userId,
-      body,
+      body: input.body,
       metadata: null,
     });
 
-    // A note is activity on the investigation, so the list ordering reflects it.
+    // A discussion entry is activity on the investigation, so the list ordering
+    // reflects it.
     await client.query(
       `UPDATE investigations SET updated_at = NOW()
        WHERE id = $1 AND organization_id = $2`,
@@ -514,4 +600,34 @@ export async function addInvestigationNote(input: {
   } finally {
     client.release();
   }
+}
+
+export async function addInvestigationNote(input: {
+  organizationId: string;
+  investigationId: string;
+  userId: string;
+  payload: unknown;
+}): Promise<InvestigationActivity> {
+  return addInvestigationEntry({
+    organizationId: input.organizationId,
+    investigationId: input.investigationId,
+    userId: input.userId,
+    type: "note",
+    body: validateNoteBody(input.payload),
+  });
+}
+
+export async function addInvestigationComment(input: {
+  organizationId: string;
+  investigationId: string;
+  userId: string;
+  payload: unknown;
+}): Promise<InvestigationActivity> {
+  return addInvestigationEntry({
+    organizationId: input.organizationId,
+    investigationId: input.investigationId,
+    userId: input.userId,
+    type: "comment",
+    body: validateCommentBody(input.payload),
+  });
 }

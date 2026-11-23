@@ -389,6 +389,7 @@ export async function collectInvestigationEvidence(input: {
     queries: plans.map((plan) => plan.query),
     warnings,
     unresolved,
+    withheld,
   });
 
   logger.info("investigation.evidence_collected", {
@@ -427,6 +428,7 @@ async function persistCollectedEvidence(input: {
   queries: string[];
   warnings: string[];
   unresolved: number;
+  withheld: number;
 }): Promise<{ added: number; existing: number }> {
   const client = await pool.connect();
 
@@ -474,6 +476,9 @@ async function persistCollectedEvidence(input: {
           added,
           existing,
           filteredOut: input.unresolved,
+          // Persisted so the count survives a reload; the collection response
+          // is not the only place an engineer can learn it.
+          withheld: input.withheld,
           queries: input.queries,
           warnings: input.warnings,
         },

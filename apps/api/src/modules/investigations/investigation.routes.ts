@@ -2,11 +2,13 @@ import { Router } from "express";
 
 import { authMiddleware } from "../../middleware/auth.middleware.js";
 import { orgMiddleware } from "../../middleware/org.middleware.js";
+import actionItemsRouter from "../actionItems/routes.js";
 import {
   analyzeInvestigationController,
   askInvestigationQuestionController,
   collectInvestigationEvidenceController,
   createInvestigationController,
+  createInvestigationCommentController,
   createInvestigationNoteController,
   getInvestigationAnalysisController,
   getInvestigationController,
@@ -104,6 +106,15 @@ investigationsRouter.post(
   createInvestigationNoteController
 );
 
+// Comments share the same append-only activity stream as notes but carry their
+// own label, so the discussion feed can distinguish a record entry from a reply.
+investigationsRouter.post(
+  "/:id/comments",
+  authMiddleware,
+  orgMiddleware,
+  createInvestigationCommentController
+);
+
 investigationsRouter.post(
   "/:id/evidence/collect",
   authMiddleware,
@@ -124,5 +135,9 @@ investigationsRouter.delete(
   orgMiddleware,
   unlinkInvestigationEvidenceController
 );
+
+// Action items are durable follow-up work with their own event history. They
+// are mounted here so every lookup is scoped by the parent investigation.
+investigationsRouter.use("/:id/action-items", actionItemsRouter);
 
 export default investigationsRouter;

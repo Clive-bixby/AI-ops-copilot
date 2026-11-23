@@ -17,6 +17,7 @@ import {
 } from "./followUp.service.js";
 import {
   addInvestigationNote,
+  addInvestigationComment,
   createInvestigation,
   getInvestigationDetail,
   listInvestigations,
@@ -113,9 +114,11 @@ export const createInvestigationController = asyncHandler(async (req, res) => {
 
 export const listInvestigationsController = asyncHandler(async (req, res) => {
   const organizationId = requireOrganization(req.organizationId);
+  const userId = requireUserId(req.user?.id);
 
   const result = await listInvestigations({
     organizationId,
+    userId,
     query: req.query,
   });
 
@@ -153,6 +156,22 @@ export const createInvestigationNoteController = asyncHandler(
     const userId = requireUserId(req.user?.id);
 
     const activity = await addInvestigationNote({
+      organizationId,
+      investigationId: readRouteId(req.params.id),
+      userId,
+      payload: req.body,
+    });
+
+    return res.status(201).json({ activity });
+  }
+);
+
+export const createInvestigationCommentController = asyncHandler(
+  async (req, res) => {
+    const organizationId = requireOrganization(req.organizationId);
+    const userId = requireUserId(req.user?.id);
+
+    const activity = await addInvestigationComment({
       organizationId,
       investigationId: readRouteId(req.params.id),
       userId,
