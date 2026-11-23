@@ -28,6 +28,9 @@ infra: PostgreSQL (pgvector) + Redis + Docker Compose
 - **Log pipeline** — ingest, parse, filter
 - **Ticket pipeline** — ingest (JSON/CSV), triage, matrix view
 - **Hybrid retrieval** over documents, tickets and grouped logs — pgvector cosine fused with Postgres full-text by reciprocal rank fusion; `/ai/search` reports `matchType` (`vector` / `keyword` / `hybrid`), a cosine `similarity` (null when only keywords matched) and an RRF `score`
+- **Investigations** — problem statement, real evidence collection, synchronous analysis, human-verified hypotheses, timeline and resolution, with ownership and a closed-record rule
+- **Action items** — follow-up work attached to one investigation: assignee, priority, due date, blocked reason, reopen, and an append-only event history; analysis-derived items keep an immutable source label
+- **Operational overview** — `/operations` counts investigations and follow-up work by status, ownership, overdue and due-soon, with a server-filtered cross-investigation action-item queue
 - **Admin panel** with role-gated access
 - **Dockerized** services with health checks
 
@@ -146,6 +149,61 @@ npm run eval:retrieval -- --keep       # keep the seeded organization for inspec
 
 The harness seeds a temporary organization through the production ingestion path, runs every labelled query in both modes, prints Recall@5/10, Precision@5/10, MRR@10, nDCG@10 and per-page counts of keyword-only results (and how many were irrelevant), then deletes the organization. It needs Postgres with pgvector and Ollama; the absolute numbers depend on the corpus and the embedding model, so compare modes within one run rather than against values copied from another machine.
 
+## Investigations, action items and operations
+
+An investigation records one operational problem: a problem statement, optional
+service and time window, the sources collected as evidence, the analyses that
+interpreted them, hypotheses a person verifies or rejects, notes, comments and
+follow-up questions. Its lifecycle is `open -> investigating -> resolved ->
+closed`; resolving requires a resolution summary, reopening clears it (the
+previous summary stays in the activity log), and a closed investigation rejects
+metadata edits until it is reopened.
+
+Ownership is optional and never inferred from the creator: a member of the same
+organization can be assigned through a composite foreign key, and removing that
+membership leaves the investigation unassigned instead of deleting it.
+
+Action items are human-written work attached to one investigation. They start
+`open` and move through `in_progress`, `blocked` (with a required reason) and
+`completed`, and a completed item can be reopened. New items are refused on a
+closed investigation, while existing items remain editable and completable. An
+item accepted from an analysis records its source once and snapshots the label:
+deleting the analysis clears the link but keeps both the item and its provenance.
+Every change is written to `action_item_events` in the same transaction, and
+that table is append-only.
+
+```bash
+# deterministic evidence-quality gate (no language model is called)
+cd apps/api && npm run eval:investigations
+```
+
+The evaluation seeds a labelled corpus through the production ingestion path and
+measures Recall, Precision and relevance-grading accuracy for evidence
+collection, including a case where nothing should match. CI replaces Ollama with
+a recorded-vector stub so the numbers are reproducible; see
+[`docs/phase-4-report.md`](docs/phase-4-report.md) for the Phase 4 results.
+
+The operational overview is served by `GET /insights/operations` (counts,
+recent work) and `GET /insights/action-items` (filtered, paginated queue). Both
+are computed in SQL over one organization, so the dashboard and the Operations
+page cannot disagree.
+
+## Testing
+
+```bash
+cd apps/api
+npm test              # unit tests, no database
+npm run typecheck
+
+# integration tests need a disposable Postgres; the suite truncates tables
+TEST_DATABASE_URL=postgres://user:pass@localhost:5432/opspilot_test npm run test:integration
+```
+
+`test:integration` fails immediately when `TEST_DATABASE_URL` is missing or
+unreachable, never falls back to `DATABASE_URL`, and applies the real migrations
+to that database before running. Never point it at development data. CI runs the
+same suite against a `pgvector/pgvector:pg16` service.
+
 ## Environment
 - `apps/api/.env.example` — API, datastore, auth, Gemini and Ollama settings
 - `apps/web/.env.example` — `VITE_API_URL` (inlined at build time)
@@ -159,12 +217,13 @@ gitignored.
 apps/api
   migrations/  ordered SQL migrations (schema source of truth)
   src/core     db pool, queue
-  src/modules  auth, documents, logs, tickets, ai, admin, insights
+  src/modules  auth, documents, logs, tickets, ai, admin, insights, investigations, actionItems, organization
   src/middleware auth, org, upload, error
-  src/scripts  migrate, baseline
+  src/test     integration harness and suites (*.itest.ts)
+  src/scripts  migrate, baseline, evaluations
 apps/web/src
-  pages/       Dashboard, Copilot, Logs, Tickets, Documents, Search, Admin, Settings
-  components/  Layout, navigation, shared UI
+  pages/       Dashboard, Copilot, Logs, Tickets, Investigations, InvestigationDetail, Operations, Documents, Search, Admin, Settings
+  components/  Layout, navigation, shared UI, investigations/ workspace panels
 ```
 
 ## Security
