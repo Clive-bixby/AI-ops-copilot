@@ -1,5 +1,7 @@
 import { createHash } from "node:crypto";
 
+import { getEmbeddingProvider } from "../ai/embedding/index.js";
+
 /**
  * Embedding configuration identity.
  *
@@ -10,9 +12,6 @@ import { createHash } from "node:crypto";
  * returning meaningless neighbours.
  */
 
-const DEFAULT_MODEL = "nomic-embed-text";
-const DEFAULT_DIMENSIONS = 768;
-
 export type EmbeddingConfig = {
   model: string;
   dimensions: number;
@@ -20,25 +19,19 @@ export type EmbeddingConfig = {
   hash: string;
 };
 
-function parsePositiveInt(raw: string | undefined, fallback: number): number {
-  if (raw === undefined || raw.trim() === "") {
-    return fallback;
-  }
-
-  const parsed = Number(raw);
-  if (!Number.isInteger(parsed) || parsed <= 0) {
-    return fallback;
-  }
-
-  return parsed;
-}
-
+/**
+ * Identity of the vectors this deployment produces, taken from the provider
+ * that actually produced them.
+ *
+ * It used to read the Ollama variables directly, which stopped being the whole
+ * truth once the provider became configurable: a fixture that replays vectors
+ * from model X must record model X, or the stored `embedding_model` would name
+ * a model that never ran. Asking the provider keeps the two in step, and the
+ * hash therefore changes exactly when the vectors would.
+ */
 export function getEmbeddingConfig(): EmbeddingConfig {
-  const model = (process.env.OLLAMA_EMBEDDING_MODEL || DEFAULT_MODEL).trim() || DEFAULT_MODEL;
-  const dimensions = parsePositiveInt(
-    process.env.EMBEDDING_DIMENSIONS,
-    DEFAULT_DIMENSIONS
-  );
+  const provider = getEmbeddingProvider();
+  const { model, dimensions } = provider;
 
   return {
     model,

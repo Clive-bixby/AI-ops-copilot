@@ -81,7 +81,15 @@ services:
       JSON_BODY_LIMIT: ${JSON_BODY_LIMIT:-1mb}
       # /ai/test-* routes stay dark unless this is true.
       ENABLE_DEV_ENDPOINTS: ${ENABLE_DEV_ENDPOINTS:-false}
-      # Ollama runs on the host, not in this stack.
+      # Ollama runs on the host, not in this stack. Set EMBEDDING_PROVIDER to
+      # openai-compatible or fixture to use a hosted API or recorded vectors.
+      EMBEDDING_PROVIDER: ${EMBEDDING_PROVIDER:-ollama}
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-}
+      EMBEDDING_DIMENSIONS: ${EMBEDDING_DIMENSIONS:-768}
+      EMBEDDING_BASE_URL: ${EMBEDDING_BASE_URL:-}
+      EMBEDDING_API_KEY: ${EMBEDDING_API_KEY:-}
+      EMBEDDING_SEND_DIMENSIONS: ${EMBEDDING_SEND_DIMENSIONS:-false}
+      EMBEDDING_FIXTURE_PATH: ${EMBEDDING_FIXTURE_PATH:-}
       OLLAMA_URL: ${OLLAMA_URL:-http://host.docker.internal:11434}
       OLLAMA_EMBEDDING_MODEL: ${OLLAMA_EMBEDDING_MODEL:-nomic-embed-text}
     extra_hosts:
@@ -114,6 +122,15 @@ services:
       DATABASE_SSL: "false"
       REDIS_URL: redis://redis:6379
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      # The worker embeds; it must use the same provider and model as the API or
+      # the stored vectors will not match the query vectors.
+      EMBEDDING_PROVIDER: ${EMBEDDING_PROVIDER:-ollama}
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-}
+      EMBEDDING_DIMENSIONS: ${EMBEDDING_DIMENSIONS:-768}
+      EMBEDDING_BASE_URL: ${EMBEDDING_BASE_URL:-}
+      EMBEDDING_API_KEY: ${EMBEDDING_API_KEY:-}
+      EMBEDDING_SEND_DIMENSIONS: ${EMBEDDING_SEND_DIMENSIONS:-false}
+      EMBEDDING_FIXTURE_PATH: ${EMBEDDING_FIXTURE_PATH:-}
       # Ollama runs on the host, not in this stack.
       OLLAMA_URL: ${OLLAMA_URL:-http://host.docker.internal:11434}
       OLLAMA_EMBEDDING_MODEL: ${OLLAMA_EMBEDDING_MODEL:-nomic-embed-text}

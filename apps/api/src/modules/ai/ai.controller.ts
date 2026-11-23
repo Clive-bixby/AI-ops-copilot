@@ -1,7 +1,7 @@
 import { asyncHandler } from "../../utils/asyncHandler.js";
 import { createHttpError } from "../../utils/httpError.js";
 import { createDocument } from "../documents/documents.service.js";
-import { checkOllamaHealth, generateEmbedding } from "./embedding.service.js";
+import { checkEmbeddingHealth, generateEmbedding } from "./embedding.service.js";
 import { chunkText, cleanText, estimateTokens } from "./chunk.service.js";
 import type { ChunkOptions } from "./chunk.service.js";
 import { searchSimilar } from "./vector.service.js";
@@ -19,7 +19,8 @@ import { answerQuestion, validateRAGQuestion } from "./rag.service.js";
 /**
  * POST /ai/test-embedding
  *
- * Temporary test route for verifying that Ollama embeddings work end-to-end.
+ * Temporary test route for verifying that the configured embedding provider
+ * works end-to-end.
  */
 export const testEmbeddingController = asyncHandler(async (req, res) => {
   const { text } = req.body as { text?: string };
@@ -41,10 +42,12 @@ export const testEmbeddingController = asyncHandler(async (req, res) => {
 /**
  * GET /ai/health
  *
- * Check whether Ollama is reachable and the embedding model is loaded.
+ * Report the configured provider and whether it can answer: Ollama reachable
+ * with the model installed, an OpenAI-compatible API listing the model, or a
+ * fixture file holding vectors.
  */
 export const aiHealthController = asyncHandler(async (_req, res) => {
-  const health = await checkOllamaHealth();
+  const health = await checkEmbeddingHealth();
 
   const status = health.healthy ? 200 : 503;
 

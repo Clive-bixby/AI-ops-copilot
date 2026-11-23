@@ -33,8 +33,13 @@ export interface RootStatus {
 
 export interface ApiHealth {
   healthy: boolean;
-  ollamaUrl: string;
+  /** "ollama" | "openai-compatible" | "fixture" */
+  provider: string;
   model: string;
+  /** null when the provider configuration is too incomplete to report a width. */
+  dimensions: number | null;
+  /** Base URL of the embedding service, or the fixture file path. */
+  endpoint: string;
   message: string;
 }
 

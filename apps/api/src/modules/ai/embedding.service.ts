@@ -1,17 +1,26 @@
-import "../../config/env.js";
+import { getEmbeddingProvider } from "./embedding/index.js";
+import {
+  EmbeddingConfigError,
+  EmbeddingModelError,
+  EmbeddingValidationError,
+} from "./embedding/errors.js";
 
-import axios, { AxiosError } from "axios";
+export {
+  EmbeddingConfigError,
+  EmbeddingConnectionError,
+  EmbeddingModelError,
+  EmbeddingValidationError,
+} from "./embedding/errors.js";
 
-// ---------------------------------------------------------------------------
-// Configuration
-// ---------------------------------------------------------------------------
-
-const OLLAMA_URL = process.env.OLLAMA_URL || "http://localhost:11434";
-const EMBEDDING_MODEL = process.env.OLLAMA_EMBEDDING_MODEL || "nomic-embed-text";
-
-// ---------------------------------------------------------------------------
-// Types
-// ---------------------------------------------------------------------------
+/**
+ * Embedding facade.
+ *
+ * Every caller -- ingestion, retrieval, the health endpoint, the evaluations --
+ * keeps the same functions as before; the provider behind them is chosen by
+ * `EMBEDDING_PROVIDER` (see `./embedding/index.ts`). Providers differ in
+ * protocol only, so the width and count checks live here once instead of in
+ * each backend.
+ */
 
 export type EmbeddingResult = {
   embedding: number[];
@@ -19,133 +28,25 @@ export type EmbeddingResult = {
   model: string;
 };
 
-type OllamaEmbeddingResponse = {
-  embedding: number[];
+export type EmbeddingHealth = {
+  healthy: boolean;
+  /** "ollama" | "openai-compatible" | "fixture" */
+  provider: string;
+  model: string;
+  /** null when the configuration is too broken to know the width. */
+  dimensions: number | null;
+  /** Base URL of the service, or the fixture file path. */
+  endpoint: string;
+  message: string;
 };
 
-type OllamaBatchEmbeddingResponse = {
-  model?: string;
-  embeddings: number[][];
-};
-
-type OllamaHealthResponse = {
-  status?: string;
-};
-
-type OllamaTagsResponse = {
-  models?: { name?: string; model?: string }[];
-};
-
-// ---------------------------------------------------------------------------
-// Custom Errors
-// ---------------------------------------------------------------------------
-
-export class EmbeddingValidationError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "EmbeddingValidationError";
-  }
-}
-
-export class EmbeddingConnectionError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "EmbeddingConnectionError";
-  }
-}
-
-export class EmbeddingModelError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "EmbeddingModelError";
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Service Functions
-// ---------------------------------------------------------------------------
-
-/**
- * Generate an embedding vector for the given text using Ollama.
- *
- * Calls `POST /api/embeddings` on the local Ollama server.
- */
-export async function generateEmbedding(text: string): Promise<EmbeddingResult> {
-  if (!text || text.trim().length === 0) {
-    throw new EmbeddingValidationError("Text must be a non-empty string");
-  }
-
-  const trimmed = text.trim();
-
-  try {
-    const response = await axios.post<OllamaEmbeddingResponse>(
-      `${OLLAMA_URL}/api/embeddings`,
-      {
-        model: EMBEDDING_MODEL,
-        prompt: trimmed,
-      },
-      {
-        timeout: 60_000, // First call may take longer (Ollama cold-start model loading)
-        headers: { "Content-Type": "application/json" },
-      }
-    );
-
-    const { embedding } = response.data;
-
-    if (!Array.isArray(embedding) || embedding.length === 0) {
-      throw new EmbeddingModelError(
-        "Ollama returned an invalid or empty embedding vector"
-      );
-    }
-
-    return {
-      embedding,
-      dimensions: embedding.length,
-      model: EMBEDDING_MODEL,
-    };
-  } catch (error) {
-    if (error instanceof EmbeddingValidationError) throw error;
-    if (error instanceof EmbeddingModelError) throw error;
-
-    if (error instanceof AxiosError) {
-      if (error.code === "ECONNREFUSED" || error.code === "ENOTFOUND") {
-        throw new EmbeddingConnectionError(
-          `Cannot connect to Ollama at ${OLLAMA_URL}. Is Ollama running?`
-        );
-      }
-
-      if (error.response?.status === 404) {
-        throw new EmbeddingModelError(
-          `Model '${EMBEDDING_MODEL}' not found. Run: ollama pull ${EMBEDDING_MODEL}`
-        );
-      }
-
-      throw new EmbeddingConnectionError(
-        `Ollama request failed (${error.response?.status ?? "unknown"}): ${error.message}`
-      );
-    }
-
-    throw error;
-  }
-}
-
-/**
- * Generate embeddings for multiple texts in one Ollama request.
- *
- * Uses `POST /api/embed`, which accepts an array of inputs. This avoids one
- * HTTP round trip per chunk and lets Ollama schedule the batch together.
- */
-export async function generateEmbeddings(
-  texts: string[]
-): Promise<EmbeddingResult[]> {
+function normaliseTexts(texts: string[]): string[] {
   if (!Array.isArray(texts) || texts.length === 0) {
-    throw new EmbeddingValidationError(
-      "Texts must be a non-empty string array"
-    );
+    throw new EmbeddingValidationError("Texts must be a non-empty string array");
   }
 
-  const trimmedTexts = texts.map((text, index) => {
-    if (!text || text.trim().length === 0) {
+  return texts.map((text, index) => {
+    if (typeof text !== "string" || text.trim().length === 0) {
       throw new EmbeddingValidationError(
         `Text at index ${index} must be a non-empty string`
       );
@@ -153,123 +54,103 @@ export async function generateEmbeddings(
 
     return text.trim();
   });
-
-  try {
-    const response = await axios.post<OllamaBatchEmbeddingResponse>(
-      `${OLLAMA_URL}/api/embed`,
-      {
-        model: EMBEDDING_MODEL,
-        input: trimmedTexts,
-      },
-      {
-        timeout: 120_000,
-        headers: { "Content-Type": "application/json" },
-      }
-    );
-
-    const { embeddings } = response.data;
-
-    if (!Array.isArray(embeddings) || embeddings.length === 0) {
-      throw new EmbeddingModelError(
-        "Ollama returned an invalid or empty embeddings array"
-      );
-    }
-
-    if (embeddings.length !== trimmedTexts.length) {
-      throw new EmbeddingModelError(
-        `Ollama returned ${embeddings.length} embeddings for ${trimmedTexts.length} inputs`
-      );
-    }
-
-    return embeddings.map((embedding, index) => {
-      if (!Array.isArray(embedding) || embedding.length === 0) {
-        throw new EmbeddingModelError(
-          `Ollama returned an invalid embedding at index ${index}`
-        );
-      }
-
-      return {
-        embedding,
-        dimensions: embedding.length,
-        model: response.data.model || EMBEDDING_MODEL,
-      };
-    });
-  } catch (error) {
-    if (error instanceof EmbeddingValidationError) throw error;
-    if (error instanceof EmbeddingModelError) throw error;
-
-    if (error instanceof AxiosError) {
-      if (error.code === "ECONNREFUSED" || error.code === "ENOTFOUND") {
-        throw new EmbeddingConnectionError(
-          `Cannot connect to Ollama at ${OLLAMA_URL}. Is Ollama running?`
-        );
-      }
-
-      if (error.response?.status === 404) {
-        throw new EmbeddingModelError(
-          `Model '${EMBEDDING_MODEL}' not found. Run: ollama pull ${EMBEDDING_MODEL}`
-        );
-      }
-
-      throw new EmbeddingConnectionError(
-        `Ollama batch request failed (${error.response?.status ?? "unknown"}): ${error.message}`
-      );
-    }
-
-    throw error;
-  }
 }
 
 /**
- * Check whether Ollama is reachable and the embedding model is available.
+ * A vector whose width differs from the configured model is unusable: the
+ * column is `VECTOR(768)` and retrieval compares widths before it compares
+ * distances. Reporting the mismatch here names the cause instead of letting a
+ * driver error surface later.
  */
-export async function checkOllamaHealth(): Promise<{
-  healthy: boolean;
-  ollamaUrl: string;
-  model: string;
-  message: string;
-}> {
+function toResults(
+  embeddings: number[][],
+  model: string,
+  expectedDimensions: number
+): EmbeddingResult[] {
+  return embeddings.map((embedding, index) => {
+    if (!Array.isArray(embedding) || embedding.length === 0) {
+      throw new EmbeddingModelError(
+        `The embedding service returned an invalid vector at index ${index}.`
+      );
+    }
+
+    if (embedding.length !== expectedDimensions) {
+      throw new EmbeddingModelError(
+        `The embedding service returned a ${embedding.length}-dimension vector but ` +
+          `${expectedDimensions} is configured. EMBEDDING_DIMENSIONS must match the ` +
+          "stored vector width, which the schema fixes at 768."
+      );
+    }
+
+    return { embedding, dimensions: embedding.length, model };
+  });
+}
+
+/** Generate an embedding vector for one piece of text. */
+export async function generateEmbedding(text: string): Promise<EmbeddingResult> {
+  const [result] = await generateEmbeddings([text]);
+
+  if (!result) {
+    throw new EmbeddingModelError("The embedding service returned no vector.");
+  }
+
+  return result;
+}
+
+/** Generate embeddings for several texts in one provider request. */
+export async function generateEmbeddings(
+  texts: string[]
+): Promise<EmbeddingResult[]> {
+  const trimmed = normaliseTexts(texts);
+  const provider = getEmbeddingProvider();
+  const batch = await provider.embed(trimmed);
+
+  return toResults(
+    batch.embeddings,
+    batch.model || provider.model,
+    provider.dimensions
+  );
+}
+
+/**
+ * Report which provider is in use and whether it can answer.
+ *
+ * The payload names the provider and its endpoint because the answer used to be
+ * reported as `ollamaUrl` unconditionally, which is wrong the moment embeddings
+ * come from somewhere else.
+ */
+export async function checkEmbeddingHealth(): Promise<EmbeddingHealth> {
   try {
-    await axios.get<OllamaHealthResponse>(OLLAMA_URL, { timeout: 5_000 });
+    const provider = getEmbeddingProvider();
+    const probe = await provider.probe();
 
-    // Readiness check: confirm the configured model is installed without
-    // generating an embedding, which can take minutes on a cold model load.
-    const tags = await axios.get<OllamaTagsResponse>(`${OLLAMA_URL}/api/tags`, {
-      timeout: 5_000,
-    });
-    const installed = (tags.data.models ?? []).some((entry) => {
-      const name = entry.name ?? entry.model ?? "";
-      return name === EMBEDDING_MODEL || name.startsWith(`${EMBEDDING_MODEL}:`);
-    });
-
-    if (!installed) {
+    return {
+      healthy: probe.ok,
+      provider: provider.name,
+      model: provider.model,
+      dimensions: provider.dimensions,
+      endpoint: provider.endpoint,
+      message: probe.message,
+    };
+  } catch (error) {
+    // A misconfiguration (an unknown EMBEDDING_PROVIDER, a bad width) is the
+    // single most likely reason someone opens this endpoint. Reporting it as a
+    // generic 500 would hide the exact sentence they need, and the message names
+    // only environment variables -- never a secret.
+    if (error instanceof EmbeddingConfigError) {
       return {
         healthy: false,
-        ollamaUrl: OLLAMA_URL,
-        model: EMBEDDING_MODEL,
-        message: `Model '${EMBEDDING_MODEL}' is not installed. Run: ollama pull ${EMBEDDING_MODEL}`,
+        provider: process.env.EMBEDDING_PROVIDER?.trim() || "unconfigured",
+        model:
+          process.env.EMBEDDING_MODEL?.trim() ||
+          process.env.OLLAMA_EMBEDDING_MODEL?.trim() ||
+          "unconfigured",
+        dimensions: null,
+        endpoint: "not configured",
+        message: error.message,
       };
     }
 
-    return {
-      healthy: true,
-      ollamaUrl: OLLAMA_URL,
-      model: EMBEDDING_MODEL,
-      message: "Ollama is running and model is available",
-    };
-  } catch (error) {
-    const reason =
-      error instanceof AxiosError
-        ? error.code === "ECONNREFUSED"
-          ? "Ollama is not running"
-          : `Ollama error: ${error.message}`
-        : "Unknown error";
-
-    return {
-      healthy: false,
-      ollamaUrl: OLLAMA_URL,
-      model: EMBEDDING_MODEL,
-      message: reason,
-    };
+    throw error;
   }
 }

@@ -127,7 +127,7 @@ export function TopNavBar({ onMenuClick }: { onMenuClick: () => void }) {
           )}
           title={
             healthy
-              ? `${data?.health?.model ?? 'Embedding model'} · ${data?.health?.ollamaUrl ?? ''}`
+              ? `${data?.health?.model ?? 'Embedding model'} · ${data?.health?.endpoint ?? ''}`
               : data?.healthError ?? 'Embedding health check pending'
           }
         >

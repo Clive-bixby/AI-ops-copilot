@@ -39,7 +39,7 @@ infra: PostgreSQL (pgvector) + Redis + Docker Compose
 |---|---|
 | Frontend | React 19, Vite, Tailwind, React Router |
 | Backend | Node.js, Express 5, TypeScript |
-| AI | Gemini for generation, Ollama (`nomic-embed-text`) for embeddings, pgvector cosine + Postgres full-text retrieval fused with RRF |
+| AI | Gemini for generation; pluggable embeddings (Ollama, any OpenAI-compatible API, or recorded fixtures); pgvector cosine + Postgres full-text retrieval fused with RRF |
 | Data | PostgreSQL + pgvector |
 | Queue | Redis + BullMQ (ingestion jobs are queued and drained by the `worker` service) |
 | Auth | JWT, org scoping, RBAC |
@@ -157,6 +157,50 @@ npm run eval:retrieval -- --keep       # keep the seeded organization for inspec
 ```
 
 The harness seeds a temporary organization through the production ingestion path, runs every labelled query in both modes, prints Recall@5/10, Precision@5/10, MRR@10, nDCG@10 and per-page counts of keyword-only results (and how many were irrelevant), then deletes the organization. It needs Postgres with pgvector and Ollama; the absolute numbers depend on the corpus and the embedding model, so compare modes within one run rather than against values copied from another machine.
+
+### Embedding providers
+
+Retrieval is only as good as the vectors behind it, and those came from one
+hard-coded local Ollama server — the single dependency a free host cannot
+satisfy. `EMBEDDING_PROVIDER` now selects the backend:
+
+| Value | What it is | Needs |
+|---|---|---|
+| `ollama` (default) | a local Ollama server with `nomic-embed-text` | a running Ollama |
+| `openai-compatible` | anything that speaks `POST {EMBEDDING_BASE_URL}/embeddings` | `EMBEDDING_BASE_URL`, usually `EMBEDDING_API_KEY` |
+| `fixture` | replays vectors recorded from a real model | a recorded fixture file |
+
+`/ai/health` reports the active provider, model, width and endpoint, and whether
+that provider answers. Ingestion and search do not know which one is in use.
+
+Two limits are worth stating plainly:
+
+- **The stored width is fixed at 768.** `source_chunks.embedding` is
+  `VECTOR(768)`; `EMBEDDING_DIMENSIONS` may only differ with a migration that
+  changes the column type. A model that cannot produce 768 dimensions is not
+  usable here without one.
+- **Fixture mode only knows the texts that were recorded.** It exists so a $0
+  deployment can demonstrate real retrieval over the seeded demo corpus; a
+  vector is never invented. Ingesting new content in that mode fails with an
+explicit error telling you to configure a provider instead.
+
+Every chunk records the model and width that produced its vector, and retrieval
+filters on them, so changing provider does not silently compare incompatible
+vectors — the affected sources are simply not returned until they are re-indexed
+(`POST /documents/:id/reprocess`, or re-ingest) under the new configuration.
+
+```bash
+# replay recorded vectors, no embedding service needed
+EMBEDDING_PROVIDER=fixture npm run dev
+
+# a hosted API that speaks the OpenAI embeddings shape
+EMBEDDING_PROVIDER=openai-compatible \
+  EMBEDDING_BASE_URL=https://api.example.com/v1 \
+  EMBEDDING_API_KEY=... \
+  EMBEDDING_MODEL=text-embedding-3-small \
+  EMBEDDING_SEND_DIMENSIONS=true \
+  npm run dev
+```
 
 ## Investigations, action items and operations
 

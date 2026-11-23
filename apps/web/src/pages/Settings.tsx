@@ -209,9 +209,16 @@ export function Settings() {
                   </Badge>
                 </div>
                 <div className="flex items-center justify-between gap-2">
+                  <span className="font-body text-body-sm text-on-surface-variant">Provider</span>
+                  <span className="font-mono text-[11px] text-on-surface">
+                    {data?.health?.provider ?? '—'}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between gap-2">
                   <span className="font-body text-body-sm text-on-surface-variant">Model</span>
                   <span className="font-mono text-[11px] text-on-surface">
                     {data?.health?.model ?? '—'}
+                    {data?.health?.dimensions ? ` · ${data.health.dimensions}d` : ''}
                   </span>
                 </div>
                 <div>
@@ -220,13 +227,14 @@ export function Settings() {
                     <span>{data?.health?.healthy ? 'reachable' : 'failed'}</span>
                   </div>
                   <div className="font-body text-[11px] leading-relaxed text-outline">
-                    Checks that Ollama answers and the configured embedding model is installed. It does not run a retrieval.
+                    Checks that the configured embedding provider answers and has its model available.
+                    It does not run a retrieval.
                   </div>
                 </div>
                 <div className="border-t border-line pt-2">
                   <div className="mono-label text-outline">Endpoint</div>
                   <div className="mt-0.5 break-all font-mono text-[10px] text-on-surface-variant">
-                    {data?.health?.ollamaUrl ?? 'not reported'}
+                    {data?.health?.endpoint ?? 'not reported'}
                   </div>
                 </div>
                 <div className="border-t border-line pt-2">
