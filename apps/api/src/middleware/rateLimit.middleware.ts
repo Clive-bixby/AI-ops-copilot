@@ -1,3 +1,5 @@
+import "../config/env.js";
+
 import rateLimit from "express-rate-limit";
 
 function positiveIntFromEnv(name: string, fallback: number): number {
@@ -21,8 +23,8 @@ export const apiRateLimiter = rateLimit({
   limit: positiveIntFromEnv("RATE_LIMIT_MAX", 120),
   standardHeaders: "draft-7",
   legacyHeaders: false,
-  // Health checks must always answer, and they are cheap.
-  skip: (req) => req.path === "/health",
+  // Probes must always answer, and they are cheap.
+  skip: (req) => req.path === "/health" || req.path === "/ready",
   message: { error: "Too many requests. Please retry in a minute." },
 });
 

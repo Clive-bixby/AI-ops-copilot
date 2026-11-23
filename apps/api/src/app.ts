@@ -3,8 +3,10 @@ import type { Request, Response } from "express";
 import cors from "cors";
 import helmet from "helmet";
 
+import { envBool } from "./config/env.js";
 import { pool } from "./core/db.js";
 import { logger } from "./core/logger.js";
+import { pingRedis } from "./core/queue.js";
 import { JSON_BODY_LIMIT, resolveAllowedOrigins } from "./config/security.js";
 import authRouter from "./modules/auth/auth.routes.js";
 import { authMiddleware } from "./middleware/auth.middleware.js";
@@ -27,6 +29,19 @@ type DependencyCheck = {
   latencyMs: number;
   error?: string;
 };
+
+/**
+ * The underlying error is logged, not published: a 503 body used to contain raw
+ * driver text such as "connect ECONNREFUSED 10.0.0.7:5432", which leaks
+ * internal addressing to anyone who can reach the endpoint.
+ */
+const EXPOSE_HEALTH_DETAIL = envBool("HEALTH_DETAIL", false);
+
+function publicCheck(check: DependencyCheck): DependencyCheck {
+  return EXPOSE_HEALTH_DETAIL
+    ? check
+    : { status: check.status, latencyMs: check.latencyMs };
+}
 
 /** A dependency probe must never hang a health check. */
 const HEALTH_TIMEOUT_MS = 2000;
@@ -67,6 +82,28 @@ async function checkDatabase(): Promise<DependencyCheck> {
       error instanceof Error ? error.message : "Database check failed";
 
     logger.error("health.database_probe_failed", { error });
+
+    return {
+      status: "down",
+      latencyMs: Date.now() - startedAt,
+      error: message,
+    };
+  }
+}
+
+/** Redis is reported by /ready but never gates it; see the handler below. */
+async function checkRedis(): Promise<DependencyCheck> {
+  const startedAt = Date.now();
+
+  try {
+    await withTimeout(pingRedis(), HEALTH_TIMEOUT_MS);
+
+    return { status: "up", latencyMs: Date.now() - startedAt };
+  } catch (error) {
+    const message =
+      error instanceof Error ? error.message : "Redis check failed";
+
+    logger.error("health.redis_probe_failed", { error });
 
     return {
       status: "down",
@@ -132,18 +169,38 @@ export function createApp(options: CreateAppOptions = {}): express.Express {
     });
   });
 
-  app.get("/health", async (req: Request, res: Response) => {
-    const database = await checkDatabase();
-    const healthy = database.status === "up";
-
+  // Liveness: is this process running? No I/O, so a platform liveness probe
+  // cannot restart a healthy API because a dependency is briefly unavailable.
+  app.get("/health", (req: Request, res: Response) => {
     res
-      .status(healthy ? 200 : 503)
+      .status(200)
       .set("Cache-Control", "no-store")
       .json({
-        status: healthy ? "healthy" : "unhealthy",
+        status: "healthy",
         uptime: process.uptime(),
         timestamp: new Date().toISOString(),
-        checks: { database },
+      });
+  });
+
+  /**
+   * Readiness: can this process serve requests? Postgres gates it, because
+   * nothing works without it. Redis does not: only ingestion needs it, and the
+   * API answers reads, writes, investigations and search without it -- gating
+   * here would turn a Redis blip into a restart loop and take the API down with
+   * it. It is reported so a degraded state is visible rather than silent.
+   */
+  app.get("/ready", async (req: Request, res: Response) => {
+    const [database, redis] = await Promise.all([checkDatabase(), checkRedis()]);
+    const ready = database.status === "up";
+
+    res
+      .status(ready ? 200 : 503)
+      .set("Cache-Control", "no-store")
+      .json({
+        status: ready ? "ready" : "not_ready",
+        uptime: process.uptime(),
+        timestamp: new Date().toISOString(),
+        checks: { database: publicCheck(database), redis: publicCheck(redis) },
       });
   });
 

@@ -82,7 +82,16 @@ docker compose up --build
 |---|---|
 | Web | http://localhost:4173 |
 | API | http://localhost:3000 |
-| API health | http://localhost:3000/health |
+| API liveness | http://localhost:3000/health |
+| API readiness | http://localhost:3000/ready |
+
+The two probes answer different questions. `/health` is liveness and does no
+I/O, so a platform cannot restart a running API because a dependency blinked.
+`/ready` checks Postgres and returns `503` when it is unreachable; Redis is
+reported in `checks.redis` but does not gate readiness, because only ingestion
+needs it and gating would turn a Redis blip into a restart loop. The container
+health check probes `/ready`. Add `HEALTH_DETAIL=true` to include the
+underlying error in the response.
 
 The `migrate` job runs the database migrations and must finish before the API
 starts. Ollama is expected on the host at `host.docker.internal:11434`; set

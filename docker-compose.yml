@@ -73,6 +73,9 @@ services:
       GEMINI_API_BASE_URL: ${GEMINI_API_BASE_URL:-https://generativelanguage.googleapis.com}
       # Browser origin allowed to call this API (the web container).
       CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:4173}
+      # Set when a proxy or platform router sits in front of the API, so rate
+      # limits key on the real client IP instead of the proxy address.
+      TRUST_PROXY: ${TRUST_PROXY:-}
       RATE_LIMIT_MAX: ${RATE_LIMIT_MAX:-120}
       AUTH_RATE_LIMIT_MAX: ${AUTH_RATE_LIMIT_MAX:-20}
       JSON_BODY_LIMIT: ${JSON_BODY_LIMIT:-1mb}
@@ -102,7 +105,9 @@ services:
   worker:
     build:
       context: ./apps/api
-    command: ["npm", "run", "worker"]
+    # Invoked directly, not through `npm run worker`, so SIGTERM reaches the
+    # worker process and its in-flight job is allowed to finish on a deploy.
+    command: ["node", "--import", "tsx", "src/workers/ingestion.worker.ts"]
     environment:
       NODE_ENV: production
       DATABASE_URL: postgres://${POSTGRES_USER:-aiops}:${POSTGRES_PASSWORD:-aiops}@db:5432/${POSTGRES_DB:-aiops}

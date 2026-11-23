@@ -27,7 +27,14 @@ RUN mkdir -p /app/uploads
 
 EXPOSE 3000
 
+# /ready gates on Postgres, so a container whose database is unreachable is
+# reported unhealthy instead of receiving traffic. /health is liveness only.
 HEALTHCHECK --interval=15s --timeout=5s --start-period=20s --retries=5 \
-  CMD node -e "fetch('http://127.0.0.1:'+(process.env.PORT||3000)+'/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+  CMD node -e "fetch('http://127.0.0.1:'+(process.env.PORT||3000)+'/ready').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
 
-CMD ["npm", "start"]
+# The Node process is PID 1 on purpose. `npm start` would make npm the signal
+# target: SIGTERM killed npm, and the server's shutdown handler -- the one that
+# drains in-flight requests and closes the pool -- never ran. The image then
+# exited 1 on every deploy instead of stopping cleanly. `npm start` remains the
+# local command; the container invokes the entry point directly.
+CMD ["node", "--import", "tsx", "src/index.ts"]

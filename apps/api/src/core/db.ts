@@ -1,7 +1,9 @@
-import { Pool, types } from "pg"
-import dotenv from "dotenv"
+import "../config/env.js";
 
-dotenv.config()
+import { Pool, types } from "pg";
+
+import { envInt } from "../config/env.js";
+import { logger } from "./logger.js";
 
 // The schema uses TIMESTAMP WITHOUT TIME ZONE and stores UTC values. Parse
 // those values as UTC so API responses do not shift by the server timezone.
@@ -56,7 +58,32 @@ function resolveSsl(connectionString: string | undefined) {
   return { rejectUnauthorized: false }
 }
 
+/**
+ * The pool is bounded and every wait has a ceiling. An unbounded pool against a
+ * managed Postgres (a free tier with a low connection cap) fails with "too many
+ * clients" under exactly the load it exists to serve, and a query with no
+ * statement timeout holds its connection forever.
+ *
+ * DB_STATEMENT_TIMEOUT_MS=0 disables the statement ceiling; migrations opt out
+ * explicitly so a long backfill is not cut in half.
+ */
 export const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
   ssl: resolveSsl(process.env.DATABASE_URL),
+  max: envInt("DB_POOL_MAX", 10),
+  connectionTimeoutMillis: envInt("DB_CONNECTION_TIMEOUT_MS", 5_000),
+  idleTimeoutMillis: envInt("DB_IDLE_TIMEOUT_MS", 30_000),
+  options: `-c statement_timeout=${envInt("DB_STATEMENT_TIMEOUT_MS", 30_000)}`,
+  application_name: "opspilot-api",
+})
+
+/**
+ * A client dropped while idle is normal, not fatal: Postgres restarts, a
+ * managed database scales to zero, a network path is reset. node-postgres
+ * removes the client and the next query opens a new one -- but an `error` event
+ * with no listener is an uncaught exception, so the process used to exit on the
+ * first such blip. This listener must never rethrow.
+ */
+pool.on("error", (error) => {
+  logger.error("db.idle_client_error", { error })
 })

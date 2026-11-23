@@ -1,3 +1,5 @@
+import "../config/env.js";
+
 import { Queue } from "bullmq";
 import { Redis } from "ioredis";
 
@@ -18,6 +20,59 @@ export function createRedisConnection(): Redis {
     maxRetriesPerRequest: null,
     enableReadyCheck: false,
   });
+}
+
+/**
+ * Liveness probe for Redis, separate from the queue connections.
+ *
+ * It must not create or reuse the ingestion queue: a readiness check runs every
+ * few seconds on a host, and reusing a BullMQ connection would make the probe
+ * wait behind queue traffic. The offline queue is disabled and the retry
+ * strategy returns null so a Redis outage produces a fast rejection instead of
+ * a growing queue of pending commands.
+ *
+ * The attempt is bounded here rather than only by the caller: a refused or
+ * black-holed connection can stay pending past any deadline, and a probe that
+ * leaves one socket behind per call would leak for as long as Redis stays down.
+ */
+export async function pingRedis(timeoutMs = 1_500): Promise<void> {
+  const client = new Redis(REDIS_URL, {
+    lazyConnect: true,
+    connectTimeout: timeoutMs,
+    maxRetriesPerRequest: 0,
+    enableOfflineQueue: false,
+    retryStrategy: () => null,
+  });
+
+  // connect()/ping() carry the real failure; an unhandled 'error' event would
+  // crash the process instead of failing the probe.
+  client.on("error", () => undefined);
+
+  const attempt = (async () => {
+    await client.connect();
+    await client.ping();
+  })();
+
+  // If the deadline wins, `attempt` must not surface later as an unhandled
+  // rejection, and the socket still has to be closed by the finally below.
+  attempt.catch(() => undefined);
+
+  let timer: NodeJS.Timeout | undefined;
+
+  const deadline = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(
+      () => reject(new Error(`Redis did not answer within ${timeoutMs}ms`)),
+      timeoutMs
+    );
+    timer.unref();
+  });
+
+  try {
+    await Promise.race([attempt, deadline]);
+  } finally {
+    clearTimeout(timer);
+    client.disconnect();
+  }
 }
 
 let queueConnection: Redis | null = null;

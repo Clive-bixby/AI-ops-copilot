@@ -1,3 +1,5 @@
+import "../../config/env.js";
+
 import axios, { AxiosError } from "axios";
 
 // ---------------------------------------------------------------------------

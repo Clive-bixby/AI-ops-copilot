@@ -1,3 +1,5 @@
+import "../config/env.js";
+
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -112,6 +114,10 @@ export async function runMigrations(
 
       await client.query("BEGIN");
       try {
+        // The pool sets a statement ceiling so one query cannot hold a
+        // connection forever. A migration is a deliberate, one-off backfill:
+        // exempt it instead of failing halfway through on a large table.
+        await client.query("SET LOCAL statement_timeout = 0");
         await client.query(migration.sql);
         await client.query(
           "INSERT INTO schema_migrations (filename, checksum) VALUES ($1, $2)",

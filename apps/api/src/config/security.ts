@@ -1,3 +1,7 @@
+// This module reads the environment at import time, so it loads the file itself
+// rather than relying on an earlier import having done it.
+import "./env.js";
+
 /**
  * Security-related configuration resolved once at startup so the values can be
  * logged and asserted instead of being read ad hoc at request time.
