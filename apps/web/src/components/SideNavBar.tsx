@@ -11,6 +11,7 @@ const navItems = [
   { icon: 'terminal', label: 'Logs Explorer', to: '/logs' },
   { icon: 'confirmation_number', label: 'Tickets & Incidents', to: '/tickets' },
   { icon: 'radar', label: 'Investigations', to: '/investigations' },
+  { icon: 'dashboard', label: 'Operations', to: '/operations' },
   { icon: 'library_books', label: 'Knowledge & Docs', to: '/documents' },
   { icon: 'manage_search', label: 'Semantic Search', to: '/search' },
   { icon: 'admin_panel_settings', label: 'Admin & Roles', to: '/admin', adminOnly: true },

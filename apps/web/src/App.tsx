@@ -7,6 +7,8 @@ import { Documents } from './pages/Documents';
 import { Settings } from './pages/Settings';
 import { Tickets } from './pages/Tickets';
 import { Investigations } from './pages/Investigations';
+import { InvestigationDetailPage } from './pages/InvestigationDetail';
+import { Operations } from './pages/Operations';
 import { Search } from './pages/Search';
 import { Admin } from './pages/Admin';
 import { Login } from './pages/Login';
@@ -44,6 +46,8 @@ function Shell() {
         <Route path="logs" element={<Logs />} />
         <Route path="tickets" element={<Tickets />} />
         <Route path="investigations" element={<Investigations />} />
+        <Route path="investigations/:id" element={<InvestigationDetailPage />} />
+        <Route path="operations" element={<Operations />} />
         <Route path="documents" element={<Documents />} />
         <Route path="search" element={<Search />} />
         <Route path="admin" element={<Admin />} />

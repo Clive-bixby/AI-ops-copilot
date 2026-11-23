@@ -32,6 +32,7 @@ import {
   statusTone,
 } from '../components/ui';
 import { AiText } from '../components/AiText';
+import { OperationsStrip } from '../components/OperationsStrip';
 
 interface DashboardData {
   overview: Overview;
@@ -302,6 +303,8 @@ export function Dashboard() {
           }
         />
       </div>
+
+      <OperationsStrip />
 
       <div className="grid items-start gap-gutter-desktop lg:grid-cols-12">
         <div className="flex min-w-0 flex-col gap-gutter-desktop lg:col-span-8">
