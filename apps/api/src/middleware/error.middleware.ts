@@ -101,6 +101,18 @@ function resolveStatus(error: HttpError): number {
   return 500;
 }
 
+/**
+ * 5xx errors that still deserve their own sentence.
+ *
+ * A 503 caused by configuration is not a crash: "Internal server error" hides
+ * the one fact the operator needs (which provider is misconfigured, or that
+ * fixture mode only knows recorded text) behind a message that says nothing.
+ * These messages name environment variables and counts, never values or hosts.
+ */
+const EXPLAINED_SERVER_ERRORS: ReadonlySet<ErrorClass> = new Set([
+  EmbeddingModelError,
+]);
+
 export const errorMiddleware: ErrorRequestHandler = (
   err,
   req,
@@ -109,8 +121,13 @@ export const errorMiddleware: ErrorRequestHandler = (
 ) => {
   const error = err as HttpError;
   const status = resolveStatus(error);
+  const explained =
+    status >= 500 &&
+    [...EXPLAINED_SERVER_ERRORS].some((ErrorType) => error instanceof ErrorType);
   const message =
-    status >= 500 ? "Internal server error" : error.message || "Request failed";
+    status >= 500 && !explained
+      ? "Internal server error"
+      : error.message || "Request failed";
 
   logger.error("request.error", {
     requestId: req.id,

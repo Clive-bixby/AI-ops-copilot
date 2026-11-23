@@ -1,0 +1,394 @@
+# Deploying OpsPilot AI
+
+This document covers putting OpsPilot on the internet for **$0 of recurring cost**,
+using the architecture that already exists: React, Express, PostgreSQL with
+pgvector, Redis with BullMQ, and Docker. Nothing here requires a microservice, a
+managed orchestration layer, or a paid API.
+
+It states limits and costs explicitly, because a deployment you cannot reason
+about is not production-ready, it is just running.
+
+Free-tier figures were checked against each provider's own pricing and docs on
+**2026-11-23**. They change; re-check before you rely on them.
+
+---
+
+## 1. The three things that block a free deployment
+
+Everything else is configuration. These three are structural:
+
+1. **Embeddings needed a local Ollama server.** Ollama runs a model on the host
+   CPU and cannot be installed on a free container platform. Solved by
+   `EMBEDDING_PROVIDER` (`ollama` | `openai-compatible` | `fixture`) — see §5.
+2. **The API and the worker shared a filesystem.** The API writes the uploaded
+   file; the worker parses it. Split across two platform services, the worker
+   gets a path that does not exist. Solved by running both processes in **one**
+   container (`apps/api/run-all.mjs`).
+3. **Migrations have no pre-deploy hook.** Compose runs them as a gated one-shot
+   job; a PaaS gives you a start command. Solved by running `db:migrate`
+   explicitly (§7).
+
+---
+
+## 2. Recommended topology
+
+```
+                 ┌──────────────────────────────┐
+  browser ──────► │ static web (CDN, free)       │  Cloudflare Pages / Netlify
+                 │  dist/ from apps/web         │
+                 └──────────┬───────────────────┘
+                            │ HTTPS + CORS (API origin)
+                 ┌──────────▼───────────────────┐
+                 │ one application container     │  Render free / Fly free
+                 │  ├─ node src/index.ts  :3000  │
+                 │  └─ node src/workers/…        │
+                 └───────┬──────────────┬────────┘
+                         │              │
+              ┌──────────▼───┐   ┌──────▼────────┐
+              │ Postgres      │   │ Redis         │
+              │ + pgvector    │   │ (BullMQ)      │
+              │ Neon free     │   │ Upstash free  │
+              └───────────────┘   └───────────────┘
+                         │
+              ┌──────────▼───────────────┐
+              │ embeddings (see §5)       │
+              │ fixture | hosted API      │
+              └──────────────────────────┘
+```
+
+Two alternatives, each with a real trade-off:
+
+- **One machine you already own** (home server, NAS) with free Cloudflare Tunnel:
+  the full stack including Ollama, no cold starts, no quotas. Costs nothing but
+  your hardware being up. Use `docker-compose.yml` unchanged.
+- **A split API + worker** on a platform with real shared storage. Correct, but
+  it needs a paid disk or object storage; that is out of scope for $0.
+
+---
+
+## 3. Free tiers, as they actually are
+
+| Need | Service | Free allowance | The catch |
+|---|---|---|---|
+| Postgres + pgvector | **Neon** | 1 GB storage/project, 100 CU-hours/project/month, autoscale to ~2 CU (≈8 GB RAM), ~112 connections on the smallest compute, 6-hour restore window | Compute sleeps after 5 minutes idle and wakes on the next query (fast); 100 CU-hours is roughly **less than 24/7** at the minimum compute unit, so an always-busy instance will suspend for the rest of the month |
+| Postgres + pgvector | Supabase | 500 MB/project, 2 projects | Pauses after ~a week idle and needs a manual restore; no backups on free |
+| Postgres | Render | 1 GB | The free instance is **deleted after ~30 days**. Do not use it. |
+| Redis | **Upstash** | 250 MB, 10 GB bandwidth/month, 10k commands/s | Plenty for a BullMQ queue; it is a network hop, so ingestion is slightly slower than local Redis |
+| Container host | **Render (free web service)** | 512 MB RAM, 0.1 CPU | Spins down after 15 minutes with no inbound traffic; ~1 minute cold start; **ephemeral filesystem** |
+| Container host | Fly.io "Free" | $5 of usage/month, up to 3 Machines, card required | A credit, not a tier. Cheapest always-on 256 MB machine is ≈ $2.19 per 30 days, so the credit covers roughly two |
+| Static web | Cloudflare Pages / Netlify | Generous free static hosting | None worth mentioning here |
+| Container host | Railway | $1 of usage/month or a one-time trial grant | Not a usable free tier |
+
+**512 MB is the real constraint** for the application container: `tsx`, Node, the
+pg pool and `pdf-parse` all live there. It is enough for a demo, not for
+sustained ingestion of large PDFs. Lower `MAX_DOCUMENT_BYTES` (currently 10 MB)
+if you see OOM restarts.
+
+Before you commit to Neon, read the arithmetic honestly: 100 CU-hours/month over
+730 hours is ~0.137 CU average, and the smallest compute unit is 0.25 CU. A
+database that is never idle will exhaust the allowance and be suspended until
+the next month. Scale-to-zero is what makes the free plan work for a demo.
+
+---
+
+## 4. Environment
+
+`apps/api/.env.example` is the full reference. For a hosted deployment these are
+the values that matter:
+
+| Variable | Required | Production value | Why |
+|---|---|---|---|
+| `DATABASE_URL` | yes | Neon pooled connection string | Must include `?sslmode=require` for a remote host |
+| `DATABASE_SSL` | no | leave unset | TLS is inferred: loopback off, remote on |
+| `REDIS_URL` | yes | Upstash Redis URL (TLS: `rediss://`) | Ingestion queue; the API degrades without it |
+| `JWT_SECRET` | yes | `openssl rand -hex 32` | The compose default is a placeholder |
+| `JWT_EXPIRES_IN` | no | `1d` | The token cannot be revoked, so keep it short |
+| `CORS_ORIGINS` | yes | the exact web origin, e.g. `https://opspilot.pages.dev` | Empty means **no** cross-origin browser access in production |
+| `TRUST_PROXY` | yes (behind a router) | `1` | Without it the rate limiters key every client on the proxy's IP |
+| `EMBEDDING_PROVIDER` | yes | `fixture`, `openai-compatible` or `ollama` | See §5 |
+| `GEMINI_API_KEY` | for analysis | your own key | `/ai/ask`, investigation analysis and follow-ups |
+| `ENABLE_DEV_ENDPOINTS` | no | `false` | `/ai/test-*` stay dark |
+| `HEALTH_DETAIL` | no | `false` | `true` adds dependency errors to `/ready` |
+| `DB_POOL_MAX` | no | `5` on a 512 MB host | Neon caps connections; a smaller pool is safer |
+| `INGESTION_CONCURRENCY` | no | `1` on a 512 MB host | Each concurrent job holds a parse + embed in memory |
+
+`PORT` defaults to 3000. The web build needs `VITE_API_URL` **at build time** —
+it is inlined by Vite, so changing the API URL means rebuilding the web image.
+
+---
+
+## 5. Embeddings on a free host
+
+`EMBEDDING_PROVIDER` selects the backend. Ingestion and search do not know which
+one is running.
+
+| Mode | What it needs | Use it when |
+|---|---|---|
+| `fixture` | the recorded vectors in `apps/api/src/evaluation/embeddingFixtures.json` | **A $0 demo of the seeded corpus.** Vectors a real model produced, no service called — but only text in the fixture can be embedded (see below) |
+| `openai-compatible` | `EMBEDDING_BASE_URL`, usually `EMBEDDING_API_KEY`, a 768-dimension model | You want real ingestion of arbitrary documents and can accept a third-party free tier |
+| `ollama` | a reachable Ollama with `nomic-embed-text` | Local development, or a machine you control |
+
+Two rules that are not negotiable:
+
+- **The width is 768.** `source_chunks.embedding` is `VECTOR(768)`. A model that
+  cannot produce 768 dimensions needs a migration first.
+- **Fixture mode only knows recorded text.** It never invents a vector, so it
+  fails with an explicit error for anything unrecorded. That applies to **free-text
+  search queries too**: the retained fixture holds the seeded chunks and the
+  questions from the evaluation set, so a demo visitor who types their own query
+  gets a 503 explaining the limit. That is the honest version of a $0 demo — the
+  seeded corpus and its recorded questions work with real vectors, nothing else
+  does.
+- If a demo must accept arbitrary documents *and* arbitrary questions, it needs a
+  real embedding API (`openai-compatible`) or a machine that runs Ollama. There is
+  no third option that stays free and correct.
+
+### Demo deployment (recommended for a portfolio link)
+
+```bash
+EMBEDDING_PROVIDER=fixture
+```
+
+`GET /ai/health` reports `{provider: "fixture", model, dimensions: 768, message:
+"N recorded vectors…"}`, so a visitor can see what is and is not real.
+
+What such a deployment can demonstrate: the seeded corpus, its citations, and
+the recorded demo questions. What it cannot: a question a visitor types himself.
+Price that in before promising a live demo — §8 has the seeding steps.
+
+---
+
+## 6. Building and running
+
+### Single container, one machine (test this locally first)
+
+```bash
+JWT_SECRET=$(openssl rand -hex 32) \
+APP_PORT=3100 WEB_PORT=4273 \
+EMBEDDING_PROVIDER=fixture \
+docker compose -f docker-compose.single.yml up --build
+```
+
+- web: http://localhost:4273
+- API: http://localhost:3100, readiness at `/ready`
+
+The `app` service runs `node run-all.mjs`: two processes, one container, one
+filesystem. Each process drains on SIGTERM; the supervisor forwards the signal to
+both and exits non-zero if either dies unexpectedly, so the platform restarts a
+half-dead container instead of serving API traffic with a dead worker.
+
+### A platform that expects one container
+
+Build the API image and run it with the platform's environment:
+
+```bash
+docker build -t opspilot-api apps/api
+docker run -p 3000:3000 \
+  -e NODE_ENV=production \
+  -e PORT=3000 \
+  -e DATABASE_URL='postgres://…:5432/opspilot?sslmode=require' \
+  -e REDIS_URL='rediss://…' \
+  -e JWT_SECRET="$(openssl rand -hex 32)" \
+  -e CORS_ORIGINS='https://your-web-origin' \
+  -e TRUST_PROXY=1 \
+  -e EMBEDDING_PROVIDER=fixture \
+  -e DB_POOL_MAX=5 \
+  -e INGESTION_CONCURRENCY=1 \
+  opspilot-api node run-all.mjs
+```
+
+On Render, use that as the start command and `/ready` as the health check path.
+On Fly, `fly launch` with the same image, `[http_service] internal_port = 3000`,
+and the health check on `/ready`.
+
+### The web build
+
+`apps/web` builds to static files. Either:
+
+- **CDN (recommended):** build with `VITE_API_URL=https://your-api`, publish
+  `apps/web/dist`. `apps/web/public/_redirects` provides the SPA fallback so a
+  hard refresh on `/investigations/:id` returns `index.html`. Cloudflare Pages:
+  build command `npm ci && npm run build`, output `dist`, project root `apps/web`.
+- **Container:** `apps/web/Dockerfile` serves `dist` with `server.mjs` — a small
+  Node static server with immutable caching for `/assets/*`, `no-cache` for
+  `index.html`, gzip for text, and the same SPA fallback. No `node_modules` in
+  that image.
+
+---
+
+## 7. Migrations
+
+`apps/api/migrations/*.sql` is the schema source of truth. Applied files are
+recorded in `schema_migrations` with a sha256 checksum; editing an applied
+migration is refused, so schema changes always arrive as a new file. A Postgres
+advisory lock serialises concurrent runs, so two deploys racing here is safe.
+
+```bash
+# against the deployment database
+DATABASE_URL='postgres://…' npm run db:migrate
+```
+
+Where to run it:
+
+- **Compose:** automatic (`migrate` service; `app` waits for it to exit 0).
+- **Fly:** `release_command = "node --import tsx src/scripts/migrate.ts"` in
+  `fly.toml`, or `fly ssh console -C "npm run db:migrate"`.
+- **Render/managed hosts:** their shell (`npm run db:migrate`) before or right
+  after the first deploy. Nothing else will do it for you.
+
+A fresh database needs nothing else: `0001` creates the extensions
+(`uuid-ossp`, `vector`). On a managed Postgres, the `vector` extension must be
+available — Neon and Supabase both provide it.
+
+---
+
+## 8. Seed data for a demo
+
+A fresh deployment is empty, and an empty product demonstrates nothing. Register
+once — that creates the user, the organization and an owner membership — then
+ingest. Two details cost an hour if you do not know them: the register response
+is only `{ token }`, and every tenant-scoped route needs the organization id in
+an `x-organization-id` header (the middleware does not fall back to the token).
+
+```bash
+API=https://your-api
+
+# node, not jq: a deploy box has node (the app runs on it) and may not have jq.
+TOKEN=$(curl -s "$API/auth/register" -H 'content-type: application/json' \
+  -d '{"email":"demo@example.com","password":"a-long-password","organizationName":"Demo"}' \
+  | node -e 'let s="";process.stdin.on("data",(d)=>s+=d).on("end",()=>console.log(JSON.parse(s).token))')
+
+# The organization id is a claim in the token (second segment, base64url).
+ORG=$(node -e 'console.log(JSON.parse(Buffer.from(process.argv[1].split(".")[1],"base64url")).organizationId)' "$TOKEN")
+
+# A document. The multipart field name is `file`. Note: the files in
+# apps/api/data/ are 0-byte placeholders in this repo, so write your own.
+printf '# Checkout runbook\n\nGateway timeouts start with the connection pool.\n' > /tmp/runbook.md
+curl -s "$API/documents/upload" \
+  -H "authorization: Bearer $TOKEN" -H "x-organization-id: $ORG" \
+  -F "file=@/tmp/runbook.md"
+
+# Logs: a JSON array, or {"logs": [...]}. The files in `apps/api/data/` are
+# 0-byte placeholders, so send entries inline rather than uploading them.
+curl -s "$API/logs/ingest" \
+  -H "authorization: Bearer $TOKEN" -H "x-organization-id: $ORG" \
+  -H 'content-type: application/json' \
+  -d '[{"level":"error","message":"Payment gateway timeout","timestamp":"2026-11-20T09:12:00Z"}]'
+```
+
+Under `fixture` mode both are refused, but not at the same point. A search fails
+inline with a 503 that says the text was not recorded. An upload is accepted
+(202) and only fails once the worker picks up the job — check
+`GET /documents`, where the document shows `processingStatus: failed` and the
+reason. Until the last retry, the uploaded original is kept so a retry can
+re-read it; it is deleted when parsing succeeds or the attempts run out, so a
+document that failed for good must be uploaded again, not reprocessed.
+
+Seed in one of the two ways that work:
+
+1. **Seed locally, then move the database.** Run the stack on a machine with
+   Ollama, ingest the corpus you want, then `pg_dump` into Neon and switch the
+deployment to `fixture`. The stored vectors are already real, so the corpus is
+   searchable and citable with no embedding service in production.
+2. **Seed against a real provider.** Set `openai-compatible` (or point
+   `EMBEDDING_BASE_URL` at a self-hosted server), ingest, and leave it configured.
+
+Neither fixes free-text questions from visitors — a query is embedded at search
+time, and fixture mode can only replay recorded ones. If the demo must answer a
+visitor's own question, the deployment needs a live provider.
+
+---
+
+## 9. Verification checklist
+
+Run these against the deployment, in order. Each one catches a different class of
+failure. They assume `jq` is installed.
+
+```bash
+# 1. Process is alive (no I/O)
+curl -fsS https://your-api/health
+
+# 2. Database reachable, Redis status visible
+curl -fsS https://your-api/ready | jq
+
+# 3. Embeddings configured for this environment
+curl -fsS https://your-api/ai/health | jq '{healthy, provider, model, dimensions}'
+
+# 4. CORS actually allows the web origin (a preflight, not a direct GET)
+curl -s -o /dev/null -D - -X OPTIONS https://your-api/auth/login \
+  -H 'Origin: https://your-web' \
+  -H 'Access-Control-Request-Method: POST' | grep -i access-control-allow-origin
+
+# 5. The web build is serving the app shell with a revalidating cache header
+curl -sI https://your-web/ | grep -i 'cache-control'
+
+# 6. Deep links work (SPA fallback, not a host 404)
+curl -s -o /dev/null -w '%{http_code}\n' https://your-web/investigations/anything
+
+# 7. Sign in, then a tenant-scoped read
+curl -s https://your-api/auth/login -H 'content-type: application/json' \
+  -d '{"email":"demo@example.com","password":"…"}'
+```
+
+Then in a browser: sign in, check the embeddings badge in the top bar, open
+Operations, and run one search. A 200 from `/ready` proves the process and the
+database; it does not prove retrieval.
+
+---
+
+## 10. What $0 does not buy
+
+State these on the product itself rather than discovering them in a demo:
+
+- **Cold starts.** After 15 minutes idle the first request takes ~1 minute. The
+  UI shows a spinner; there is no way around it on a free web service.
+- **Ephemeral storage.** An upload that arrives just as the container sleeps can
+  lose its scratch file. The job is marked failed with a reason and can be
+  reprocessed (`POST /documents/:id/reprocess`).
+- **One instance.** No zero-downtime deploys, no horizontal scaling. A restart is
+  a short outage.
+- **Database ceilings.** 100 CU-hours/month and 1 GB on Neon; compute scales to
+  zero between requests and takes a moment to wake.
+- **No point-in-time recovery** beyond Neon's 6-hour window, and **no backups you
+  control**. Export what matters if the data matters.
+- **No log search.** One log stream, JSON lines, and `x-request-id` to correlate a
+  user-reported error with the line that caused it.
+- **Fixture embeddings are not a model.** A $0 deployment replays recorded
+  vectors: seeded content is genuinely searchable, arbitrary content and
+  free-text questions are refused with an explanation. Calling that a working
+  RAG demo in front of a user is a claim it cannot carry.
+- **Shared CPU.** Analysis and ingestion are slow; `INGESTION_CONCURRENCY=1` is
+  the honest setting.
+
+---
+
+## 11. Troubleshooting
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| `/ready` 503 | Database unreachable, wrong TLS mode, or pool exhausted | Set `DATABASE_SSL` / `?sslmode=require`; lower `DB_POOL_MAX`; check Neon is not suspended |
+| `/ready` 200 but `checks.redis.down` | Redis unreachable | Ingestion stops, the rest works. Check the Upstash URL is `rediss://` |
+| `/ai/health` 503, "EMBEDDING_BASE_URL is required" | `EMBEDDING_PROVIDER=openai-compatible` without a URL | Set `EMBEDDING_BASE_URL`, or switch to `fixture` |
+| "has not been recorded" on upload or search | Fixture mode, and the text was never recorded | Expected. Use a real provider to accept new documents or a visitor's own question; see §5 and §8 |
+| Browser blocks every request (CORS) | `CORS_ORIGINS` does not contain the exact origin | Set it to the scheme+host with no trailing slash, then redeploy |
+| Everyone gets 429 at once | `TRUST_PROXY` unset behind a platform router | Set `TRUST_PROXY=1` |
+| Uploads fail right after a quiet period | Container was asleep and the scratch file was lost | Retry the upload; see §10 |
+| `Migration … changed after it was applied` | An applied migration file was edited | Revert the edit and add a new migration |
+| 502 from the platform, `/health` fine | Health check path still `/health` while dependencies are down | Point the platform's check at `/ready` |
+| Analysis fails with a provider error | `GEMINI_API_KEY` missing or out of quota | Set the key; a free-tier quota resets daily |
+
+---
+
+## 12. Security settings that are not optional in production
+
+- `JWT_SECRET` is not the compose placeholder. Generate it; never commit it.
+- `CORS_ORIGINS` is an explicit list. There is no wildcard support, and an empty
+  value blocks all cross-origin browser access.
+- `TRUST_PROXY=1` whenever a router or proxy sits in front of the API, or the
+  rate limiters protect the proxy instead of the users.
+- `ENABLE_DEV_ENDPOINTS=false`. The `/ai/test-*` routes stay dark.
+- `HEALTH_DETAIL=false` unless you are debugging: the detail can name internal
+  hosts and ports.
+- Keep `DB_POOL_MAX` below the provider's connection cap.
+- Rotate `JWT_SECRET` by redeploying: every existing session is invalidated, which
+  is the intended effect and the only revocation mechanism today.

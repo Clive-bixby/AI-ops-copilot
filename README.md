@@ -107,6 +107,21 @@ bundle at build time, so rebuild the web image afterwards.
 Compose defaults (database password, `JWT_SECRET`) are placeholders for local
 use. Set real values in `.env` before putting the stack anywhere shared.
 
+## Deploying
+
+[`docs/deployment.md`](docs/deployment.md) covers a **$0** deployment: one
+application container (API + worker together, so the upload hand-off stays on one
+filesystem), Neon for Postgres with pgvector, Upstash for Redis, and a static
+build on a CDN. It lists the free-tier limits, the environment matrix, the
+migration runbook, a verification checklist and a troubleshooting table.
+
+```bash
+# single-container topology, the shape a free host gives you
+JWT_SECRET=$(openssl rand -hex 32) APP_PORT=3100 WEB_PORT=4273 \
+  EMBEDDING_PROVIDER=fixture \
+  docker compose -f docker-compose.single.yml up --build
+```
+
 ## Database migrations
 
 `apps/api/migrations/*.sql` is the single source of truth for the schema and is

@@ -6,6 +6,7 @@ import { errorMiddleware } from "./error.middleware.js";
 import { AuthUnauthorizedError, AuthValidationError } from "../modules/auth/auth.service.js";
 import { LogParseError } from "../modules/logs/log.parser.js";
 import { RAGProviderTimeoutError } from "../modules/ai/rag.service.js";
+import { EmbeddingModelError } from "../modules/ai/embedding.service.js";
 import {
   InvestigationConflictError,
   InvestigationNotFoundError,
@@ -75,6 +76,26 @@ describe("errorMiddleware", () => {
     const server = handle(new Error("relation \"users\" does not exist"));
     assert.equal(server.status, 500);
     assert.equal(server.body.error, "Internal server error");
+  });
+
+  it("keeps the message of a configuration 5xx", () => {
+    // A fixture deployment refuses unrecorded text. The status says "this
+    // service cannot do that"; the message is the only thing that tells a demo
+    // visitor which provider actually runs here.
+    const capped = handle(
+      new EmbeddingModelError("This deployment replays recorded embeddings.")
+    );
+
+    assert.equal(capped.status, 503);
+    assert.equal(capped.body.error, "This deployment replays recorded embeddings.");
+
+    // Anything else above 500 still hides its internals.
+    const other = handle(
+      new (class extends Error {
+        readonly statusCode = 503;
+      })("connect ECONNREFUSED 10.0.0.4:5432")
+    );
+    assert.equal(other.body.error, "Internal server error");
   });
 
   it("honours an explicit statusCode on the error", () => {

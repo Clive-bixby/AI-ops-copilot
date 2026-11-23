@@ -20,6 +20,9 @@ RUN npm ci --include=dev --no-audit --no-fund
 COPY tsconfig.json ./
 COPY migrations ./migrations
 COPY src ./src
+# Supervisor for the single-container topology (API + worker in one process
+# group). Unused by the default CMD below.
+COPY run-all.mjs ./
 
 # Uploaded originals are written here by multer and deleted once their text has
 # been extracted; docker-compose mounts a volume here.

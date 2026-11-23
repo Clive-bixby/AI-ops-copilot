@@ -1,0 +1,5 @@
+# Single-page app fallback for static hosts (Cloudflare Pages, Netlify).
+# React Router owns these paths; a hard refresh on /investigations/:id must
+# return index.html instead of a 404. The bundled static server does this itself;
+# this file is what a CDN host reads.
+/*  /index.html  200

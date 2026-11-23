@@ -132,6 +132,8 @@ export async function indexDocument(input: {
     throw new IngestionValidationError("Document ID is required");
   }
 
+  let indexed = false;
+
   try {
     const document = await loadDocument(organizationId, documentId);
 
@@ -177,6 +179,8 @@ export async function indexDocument(input: {
         contentHash,
         chunkCount: existing.rows[0]?.total ?? 0,
       });
+
+      indexed = true;
 
       return {
         status: "unchanged",
@@ -234,6 +238,8 @@ export async function indexDocument(input: {
       embeddingModel: config.model,
     });
 
+    indexed = true;
+
     return {
       status: "indexed",
       documentId,
@@ -268,7 +274,12 @@ export async function indexDocument(input: {
 
     throw error;
   } finally {
-    if (input.filePath && input.deleteFileAfter !== false) {
+    // The original is deleted when its text has been extracted, or when the
+    // caller says this was the last attempt. It used to be deleted even when
+    // BullMQ was going to retry, so the retry failed with "Uploaded file could
+    // not be found" and that misleading message replaced the real cause on the
+    // document row.
+    if (input.filePath && (indexed || input.deleteFileAfter !== false)) {
       await removeUploadedFile(input.filePath);
     }
   }

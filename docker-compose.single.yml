@@ -1,0 +1,125 @@
+name: opspilot-single
+
+# Single-container deployment topology.
+#
+# `docker-compose.yml` is the local development stack and runs the API and the
+# worker as separate services. That only works when both can see the same
+# uploads volume, which a free container host cannot give you across services.
+# Here both processes live in one container (`apps/api/run-all.mjs`), so the file
+# the API receives is the file the worker parses.
+#
+# Uploads are deliberately NOT on a volume: the file is deleted once its text is
+# extracted, so it is a transient hand-off, not stored data. A container restart
+# between upload and parse loses the scratch file; the job fails with a recorded
+# reason and can be reprocessed. Durable state lives in Postgres.
+#
+#   APP_PORT=3100 WEB_PORT=4273 docker compose -f docker-compose.single.yml up --build
+#
+# On a platform that gives you one service, deploy the `app` image on its own and
+# put the web build on a static host instead -- see docs/deployment.md.
+
+services:
+  db:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-aiops}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-aiops}
+      POSTGRES_DB: ${POSTGRES_DB:-aiops}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U ${POSTGRES_USER:-aiops} -d ${POSTGRES_DB:-aiops}",
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+
+  redis:
+    image: redis:7
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+  # Runs once and must succeed; the app waits for it, so a fresh volume is
+  # always migrated before any request is served.
+  migrate:
+    build:
+      context: ./apps/api
+    command: ["node", "--import", "tsx", "src/scripts/migrate.ts"]
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER:-aiops}:${POSTGRES_PASSWORD:-aiops}@db:5432/${POSTGRES_DB:-aiops}
+      DATABASE_SSL: "false"
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: "no"
+
+  app:
+    build:
+      context: ./apps/api
+    command: ["node", "run-all.mjs"]
+    environment:
+      NODE_ENV: production
+      PORT: "3000"
+      DATABASE_URL: postgres://${POSTGRES_USER:-aiops}:${POSTGRES_PASSWORD:-aiops}@db:5432/${POSTGRES_DB:-aiops}
+      DATABASE_SSL: "false"
+      REDIS_URL: redis://redis:6379
+      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET must be set; generate one with openssl rand -hex 32}
+      JWT_EXPIRES_IN: ${JWT_EXPIRES_IN:-1d}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-2.5-flash-lite}
+      GEMINI_API_BASE_URL: ${GEMINI_API_BASE_URL:-https://generativelanguage.googleapis.com}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:4173}
+      # Behind a platform router, rate limits must key on the real client IP.
+      TRUST_PROXY: ${TRUST_PROXY:-}
+      RATE_LIMIT_MAX: ${RATE_LIMIT_MAX:-120}
+      AUTH_RATE_LIMIT_MAX: ${AUTH_RATE_LIMIT_MAX:-20}
+      JSON_BODY_LIMIT: ${JSON_BODY_LIMIT:-1mb}
+      ENABLE_DEV_ENDPOINTS: ${ENABLE_DEV_ENDPOINTS:-false}
+      HEALTH_DETAIL: ${HEALTH_DETAIL:-false}
+      EMBEDDING_PROVIDER: ${EMBEDDING_PROVIDER:-ollama}
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-}
+      EMBEDDING_DIMENSIONS: ${EMBEDDING_DIMENSIONS:-768}
+      EMBEDDING_BASE_URL: ${EMBEDDING_BASE_URL:-}
+      EMBEDDING_API_KEY: ${EMBEDDING_API_KEY:-}
+      EMBEDDING_SEND_DIMENSIONS: ${EMBEDDING_SEND_DIMENSIONS:-false}
+      EMBEDDING_FIXTURE_PATH: ${EMBEDDING_FIXTURE_PATH:-}
+      OLLAMA_URL: ${OLLAMA_URL:-http://host.docker.internal:11434}
+      OLLAMA_EMBEDDING_MODEL: ${OLLAMA_EMBEDDING_MODEL:-nomic-embed-text}
+      # One job at a time is the honest setting for a 512 MB free instance;
+      # each concurrent job holds a parse and an embedding batch in memory.
+      INGESTION_CONCURRENCY: ${INGESTION_CONCURRENCY:-1}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    ports:
+      - "${APP_PORT:-3000}:3000"
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  web:
+    build:
+      context: ./apps/web
+      args:
+        VITE_API_URL: ${VITE_API_URL:-http://localhost:3000}
+    ports:
+      - "${WEB_PORT:-4173}:4173"
+    depends_on:
+      app:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  pgdata:

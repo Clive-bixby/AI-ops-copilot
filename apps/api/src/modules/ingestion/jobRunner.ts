@@ -42,10 +42,18 @@ export async function runIngestionJob(
     [jobId, organizationId]
   );
 
-  if (!claimed.rows[0]) {
+  const attempt = claimed.rows[0];
+
+  if (!attempt) {
     logger.info("ingestion.job_already_finished", { jobId, organizationId });
     return;
   }
+
+  // While a retry is still possible the uploaded original must survive: BullMQ
+  // re-runs the job and the document is parsed from that file, not from a copy.
+  // Deleting it on the first failure made every retry answer "Uploaded file
+  // could not be found", which then overwrote the real error on the document.
+  const isFinalAttempt = attempt.attempts >= attempt.max_attempts;
 
   try {
     if (sourceType === "document") {
@@ -53,7 +61,7 @@ export async function runIngestionJob(
         organizationId,
         documentId: sourceId,
         ...(payload.filePath ? { filePath: payload.filePath } : {}),
-        deleteFileAfter: true,
+        deleteFileAfter: isFinalAttempt,
       });
     } else if (sourceType === "ticket") {
       await indexTicket({ organizationId, ticketId: sourceId });
