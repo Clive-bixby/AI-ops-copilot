@@ -56,7 +56,7 @@ cd ../web && npm install
 
 # 2. Configure
 cp apps/api/.env.example apps/api/.env     # set DATABASE_URL, JWT_SECRET, GEMINI_API_KEY
-cp apps/web/.env.example apps/web/.env     # VITE_API_URL, e.g. http://localhost:5000
+cp apps/web/.env.example apps/web/.env     # VITE_API_URL, e.g. http://localhost:3000
 
 # 3. Create the schema
 cd apps/api && npm run db:migrate

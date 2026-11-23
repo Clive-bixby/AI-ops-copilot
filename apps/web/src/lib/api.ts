@@ -36,7 +36,7 @@ import type {
 
 export const API_URL: string =
   (import.meta.env.VITE_API_URL as string | undefined)?.replace(/\/$/, '') ||
-  'http://localhost:5000';
+  'http://localhost:3000';
 
 const TOKEN_KEY = 'jwt';
 const ORG_KEY = 'orgId';

@@ -18,7 +18,7 @@ This folder contains a ready Postman setup for testing the Day 4 synchronous doc
 
 ## Before Running
 
-1. Start API server on `http://localhost:5000`.
+1. Start API server on `http://localhost:3000`.
 2. Ensure Supabase migration for document processing fields is applied.
 3. Ensure Ollama is running with model matching `VECTOR(768)` (for example `nomic-embed-text`).
 
