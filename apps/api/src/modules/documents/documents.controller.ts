@@ -21,6 +21,7 @@ import {
 import {
   createDocument,
   deleteDocument,
+  describeReprocessReadiness,
   getDocumentDetail,
   listDocuments,
   updateDocumentProcessingStatus,
@@ -221,11 +222,44 @@ export const reprocessDocumentController = asyncHandler(async (req, res) => {
     throw createHttpError(404, "Document not found");
   }
 
-  const result = await enqueueIngestionJob({
+  // Reprocessing re-reads the stored text, not the original upload. If nothing
+  // was extracted and no job is still running, there is nothing to index and the
+  // file is gone: say so now instead of queueing a job that cannot succeed.
+  const readiness = await describeReprocessReadiness(
     organizationId,
-    sourceType: "document",
-    sourceId: documentId,
-  });
+    documentId
+  );
+
+  if (readiness === "missing_source") {
+    return res.status(409).json({
+      error:
+        "This document has no stored text and its original upload was deleted after processing. Upload the file again to index it.",
+      code: "source_file_unavailable",
+      documentId,
+    });
+  }
+
+  let result;
+
+  try {
+    result = await enqueueIngestionJob({
+      organizationId,
+      sourceType: "document",
+      sourceId: documentId,
+    });
+  } catch (error) {
+    // Same meaning as on upload: the request is valid, the transport is not.
+    // This used to surface as a 500, which reads as "the API is broken" for a
+    // failure that is temporary and outside the request.
+    if (error instanceof QueueUnavailableError) {
+      throw createHttpError(
+        503,
+        "Ingestion queue is unavailable. The document was not queued; try again shortly."
+      );
+    }
+
+    throw error;
+  }
 
   return res.status(202).json({
     documentId,

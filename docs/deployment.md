@@ -328,7 +328,15 @@ curl -s -o /dev/null -w '%{http_code}\n' https://your-web/investigations/anythin
 # 7. Sign in, then a tenant-scoped read
 curl -s https://your-api/auth/login -H 'content-type: application/json' \
   -d '{"email":"demo@example.com","password":"…"}'
+
+# 8. Ingestion is actually being worked on (worker alive, nothing stuck)
+curl -fsS https://your-api/ingestion/health \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "x-organization-id: $ORG" | jq '{jobs, queue, worker}'
 ```
+
+`worker.status` must be `up` and `jobs.stuckRunning` must be 0 on a healthy
+deployment. See §14 for what those numbers mean.
 
 Then in a browser: sign in, check the embeddings badge in the top bar, open
 Operations, and run one search. A 200 from `/ready` proves the process and the
@@ -374,6 +382,11 @@ State these on the product itself rather than discovering them in a demo:
 | Everyone gets 429 at once | `TRUST_PROXY` unset behind a platform router | Set `TRUST_PROXY=1` |
 | Uploads fail right after a quiet period | Container was asleep and the scratch file was lost | Retry the upload; see §10 |
 | `Migration … changed after it was applied` | An applied migration file was edited | Revert the edit and add a new migration |
+| Jobs sit on `running` after a restart | The worker was killed mid-job; the ledger row outlives it | Wait for one sweep (`INGESTION_STALE_JOB_MS`, 10 min by default) or restart the container; check `jobs.stuckRunning` in `/ingestion/health` |
+| `/ingestion/health` reports `worker.status: missing` | No worker has beaten for 45 s: the worker process died, or only the API is running | Check the container log for `worker.started`; both processes run in one container (§3) |
+| `/ingestion/health` reports `queue.available: false` | Redis unreachable, so ingestion is stopped while the rest of the API works | Check `REDIS_URL`; recovered jobs stay queued until Redis returns |
+| Reprocess answers 409 `source_file_unavailable` | The upload was deleted before any text was extracted; there is nothing to re-index | Upload the file again. See §14 |
+| Upload accepted but the document never leaves `pending` | No worker: nothing consumes the queue | `/ingestion/health` shows `worker.status: missing`; restart the container |
 | 502 from the platform, `/health` fine | Health check path still `/health` while dependencies are down | Point the platform's check at `/ready` |
 | Analysis fails with a provider error | `GEMINI_API_KEY` missing or out of quota | Set the key; a free-tier quota resets daily |
 
@@ -423,3 +436,79 @@ Stated plainly so nobody assumes a guarantee this system does not make:
   bounded, which is the part that protects memory, not availability.
 - **Uploads are validated by extension, not content.** A `.pdf` that is not a PDF
   fails in the parser with a recorded reason; it is not executed or served back.
+
+---
+
+## 14. When an ingestion job dies with the process
+
+A free host restarts on its own schedule: a deploy, an idle spin-down, an OOM
+kill. The worker can be killed between "this job started" and "this job
+finished", which leaves a row in `ingestion_jobs` marked `running` with nothing
+alive that could move it. The UI showed "processing" indefinitely.
+
+The worker sweeps for that state. At start, and every
+`INGESTION_RECOVERY_INTERVAL_MS` (60 s), it looks for rows left in `queued` or
+`running` that have not changed for `INGESTION_STALE_JOB_MS` (10 min) and:
+
+- **attempts remain** — the job goes back to the queue under the **same** job id,
+  so BullMQ cannot run the same source twice at once. The document is parsed
+  from the original upload when that file is still on disk; the ledger stores the
+  path for exactly this case.
+- **attempts are used up** — the job becomes `failed` with the reason, and a
+  document source stops showing `processing` and records the same reason.
+
+Nothing is requeued while BullMQ still owns the job (waiting, delayed or
+active), so a slow-but-alive run is never duplicated. A Redis outage leaves the
+row untouched and retries on the next sweep rather than declaring work failed.
+
+### The uploaded original is not kept
+
+The file is deleted once its text is extracted, or when the last attempt fails.
+Reprocessing therefore re-reads the extracted text, not the upload:
+
+- **stored text exists** — `POST /documents/:id/reprocess` re-chunks and
+  re-embeds it. This is how a document is re-indexed after a provider change.
+- **no stored text, nothing running** — the request answers **409**
+  (`code: source_file_unavailable`). The file was deleted before anything was
+  extracted, so there is nothing to index: upload it again. It used to answer
+  202 and then fail with "Document has no extracted text", which made an
+  impossible request look accepted.
+- **a job is still queued or running** — the request is accepted and returns that
+  job (deduplicated), because the file may still be on disk and about to be
+  parsed.
+
+### One read for "is ingestion working?"
+
+`GET /ingestion/health` (auth + `x-organization-id`) answers what used to need
+three places:
+
+```json
+{
+  "generatedAt": "2026-11-23T12:00:00.000Z",
+  "staleAfterSeconds": 600,
+  "jobs": {
+    "counts": { "queued": 0, "running": 1, "succeeded": 12, "failed": 1, "skipped": 0 },
+    "total": 14,
+    "stuckRunning": 0,
+    "oldestQueuedSeconds": null
+  },
+  "queue": {
+    "available": true,
+    "counts": { "waiting": 0, "active": 1, "delayed": 0, "failed": 0, "completed": 40 }
+  },
+  "worker": { "status": "up", "lastHeartbeatSecondsAgo": 3 }
+}
+```
+
+- `jobs` is this tenant's ledger. `stuckRunning` uses the sweep's threshold, so a
+  non-zero value counts jobs the sweeper is about to handle.
+- `queue` is the transport. `available: false` means Redis is unreachable; the
+  endpoint still answers, because that is exactly when you need it.
+- `worker` comes from a heartbeat key with a 45 s TTL: `up`, `stale`, `missing`
+  (no worker has reported) or `unknown` (Redis unreachable). A queue with
+  waiting jobs proves nothing about whether anyone is consuming it; this is what
+  makes a dead worker visible.
+
+The worker logs `worker.drained` with the remaining queue counts on shutdown, so
+"the queue was empty when this stopped" is a recorded fact rather than an
+assumption.

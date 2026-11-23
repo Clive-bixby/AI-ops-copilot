@@ -212,6 +212,59 @@ export async function getDocumentDetail(
   };
 }
 
+export type ReprocessReadiness = "ready" | "pending" | "missing_source";
+
+/**
+ * Can this document be indexed again from what is stored?
+ *
+ * Reprocessing does not re-upload anything: it re-reads the document's extracted
+ * text. The uploaded original is deleted once its text has been extracted (or
+ * when the last attempt fails), so a document with no stored text can only be
+ * indexed again after the file is uploaded again. Answering 202 there produced a
+ * job that was guaranteed to fail with "Document has no extracted text", long
+ * after the user could connect it to their click.
+ *
+ * An active job means the file may still be on disk and about to be parsed, so
+ * that case is not refused.
+ */
+export async function describeReprocessReadiness(
+  organizationId: string,
+  documentId: string
+): Promise<ReprocessReadiness | null> {
+  const orgId = (organizationId || "").trim();
+  const docId = (documentId || "").trim();
+
+  if (!orgId || !docId || !UUID_REGEX.test(docId)) {
+    return null;
+  }
+
+  const result = await pool.query<{ has_text: boolean; active_job: boolean }>(
+    `SELECT btrim(COALESCE(d.content, '')) <> '' AS has_text,
+            EXISTS (
+              SELECT 1
+              FROM ingestion_jobs j
+              WHERE j.organization_id = d.organization_id
+                AND j.source_type = 'document'
+                AND j.source_id = d.id
+                AND j.status IN ('queued', 'running')
+            ) AS active_job
+     FROM documents d
+     WHERE d.id = $1 AND d.organization_id = $2`,
+    [docId, orgId]
+  );
+
+  const row = result.rows[0];
+  if (!row) {
+    return null;
+  }
+
+  if (row.has_text) {
+    return "ready";
+  }
+
+  return row.active_job ? "pending" : "missing_source";
+}
+
 export async function deleteDocument(
   organizationId: string,
   documentId: string

@@ -31,7 +31,10 @@ export async function runIngestionJob(
     `
     UPDATE ingestion_jobs
     SET status = 'running',
-        attempts = attempts + 1,
+        -- Clamped to the budget: the attempts CHECK constraint rejects
+        -- attempts > max_attempts, which would turn a fourth delivery into a
+        -- 500 from inside the job instead of a recorded outcome.
+        attempts = LEAST(attempts + 1, max_attempts),
         started_at = COALESCE(started_at, NOW()),
         updated_at = NOW()
     WHERE id = $1

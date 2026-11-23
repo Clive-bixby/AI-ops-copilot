@@ -1,10 +1,14 @@
 import { pool } from "../../core/db.js";
 import { logger } from "../../core/logger.js";
+import { readWorkerHeartbeat, WORKER_HEARTBEAT_TTL_SECONDS } from "../../core/queue.js";
 import { asyncHandler } from "../../utils/asyncHandler.js";
 import { createHttpError } from "../../utils/httpError.js";
+import { resolveStaleJobMs } from "./jobRecovery.js";
 import {
   enqueueIngestionJob,
   getIngestionJob,
+  getIngestionLedgerSnapshot,
+  getIngestionQueueSnapshot,
   listIngestionJobs,
 } from "./jobQueue.js";
 import type { IngestionJobStatus } from "./jobQueue.js";
@@ -83,6 +87,71 @@ export const getIngestionJobController = asyncHandler(async (req, res) => {
   }
 
   return res.status(200).json(job);
+});
+
+/**
+ * One read for "is ingestion working right now".
+ *
+ * Answering that used to require three places: the job list (which only shows
+ * this tenant's rows), Redis (is anything queued?), and the container logs (is a
+ * worker alive?). A stuck `running` row looked identical to a slow one, and a
+ * dead worker looked like an empty queue.
+ *
+ * Redis failures are reported as `queue.available: false` instead of failing the
+ * endpoint: when ingestion is broken, this is the endpoint you are calling.
+ */
+export const ingestionHealthController = asyncHandler(async (req, res) => {
+  const organizationId = req.organizationId;
+  if (!organizationId) {
+    throw createHttpError(400, "Organization ID is required");
+  }
+
+  const staleAfterMs = resolveStaleJobMs();
+  const jobs = await getIngestionLedgerSnapshot(organizationId, staleAfterMs);
+
+  let queue: { available: boolean; counts?: Record<string, number> } = {
+    available: false,
+  };
+  let worker: { status: "up" | "stale" | "missing" | "unknown"; lastHeartbeatSecondsAgo: number | null } = {
+    status: "unknown",
+    lastHeartbeatSecondsAgo: null,
+  };
+
+  try {
+    const [counts, heartbeat] = await Promise.all([
+      getIngestionQueueSnapshot(),
+      readWorkerHeartbeat(),
+    ]);
+
+    queue = { available: true, counts: { ...counts } };
+
+    if (heartbeat === null) {
+      worker = { status: "missing", lastHeartbeatSecondsAgo: null };
+    } else {
+      const ageSeconds = Math.max(0, Math.round((Date.now() - heartbeat) / 1000));
+      worker = {
+        status:
+          ageSeconds <= WORKER_HEARTBEAT_TTL_SECONDS ? "up" : "stale",
+        lastHeartbeatSecondsAgo: ageSeconds,
+      };
+    }
+  } catch (error) {
+    logger.warn("ingestion.health_redis_unavailable", {
+      organizationId,
+      error,
+    });
+  }
+
+  return res
+    .status(200)
+    .set("Cache-Control", "no-store")
+    .json({
+      generatedAt: new Date().toISOString(),
+      staleAfterSeconds: Math.round(staleAfterMs / 1000),
+      jobs,
+      queue,
+      worker,
+    });
 });
 
 /**

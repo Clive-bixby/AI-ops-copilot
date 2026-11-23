@@ -86,6 +86,7 @@ docker compose up --build
 | API | http://localhost:3000 |
 | API liveness | http://localhost:3000/health |
 | API readiness | http://localhost:3000/ready |
+| Ingestion health | http://localhost:3000/ingestion/health |
 
 The two probes answer different questions. `/health` is liveness and does no
 I/O, so a platform cannot restart a running API because a dependency blinked.
@@ -94,6 +95,14 @@ reported in `checks.redis` but does not gate readiness, because only ingestion
 needs it and gating would turn a Redis blip into a restart loop. The container
 health check probes `/ready`. Add `HEALTH_DETAIL=true` to include the
 underlying error in the response.
+
+Ingestion has its own answer. `GET /ingestion/health` (auth +
+`x-organization-id`) reports this tenant's job counts, how many are stuck past
+the stale window, the Redis queue depth, and whether a worker is alive (a
+heartbeat key with a 45 s TTL). A queue with waiting jobs says nothing about
+whether anything is consuming it; `worker.status` does. The worker also sweeps
+for jobs a crashed process left on `running` and requeues or fails them — see
+[§14 of the deployment notes](docs/deployment.md#14-when-an-ingestion-job-dies-with-the-process).
 
 The `migrate` job runs the database migrations and must finish before the API
 starts. Ollama is expected on the host at `host.docker.internal:11434`; set
