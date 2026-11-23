@@ -1,24 +1,37 @@
 import type {
+  ActionItemDetail,
+  ActionItemList,
+  AnalysisHypothesis,
   ApiHealth,
   AskResponse,
+  CreateActionItemInput,
+  CreateInvestigationInput,
   DecodedToken,
   DocumentDetail,
   DocumentSummary,
+  FollowUpAnswer,
   IngestLogsResponse,
   IngestTicketsResponse,
   InvestigationAnalysisResult,
   InvestigationDetail,
   InvestigationList,
+  InvestigationListParams,
+  InvestigationMutationResponse,
   InvestigationTimeline,
   LogEntry,
   LoginResponse,
   MembersResponse,
+  OperationsActionItemList,
+  OperationsActionItemParams,
+  OperationsOverview,
   Overview,
   RootStatus,
   SearchResponse,
   Session,
   SystemStatus,
   Ticket,
+  UpdateActionItemInput,
+  UpdateInvestigationInput,
 } from './types';
 
 export const API_URL: string =
@@ -148,6 +161,21 @@ export const api = {
 
   insights: {
     overview: () => request<Overview>('/insights/overview'),
+    operations: () => request<OperationsOverview>('/insights/operations'),
+    actionItems: (params: OperationsActionItemParams = {}) => {
+      const search = new URLSearchParams();
+      if (params.status) search.set('status', params.status);
+      if (params.priority) search.set('priority', params.priority);
+      if (params.assignee) search.set('assignee', params.assignee);
+      if (params.due) search.set('due', params.due);
+      if (params.investigationId) search.set('investigationId', params.investigationId);
+      if (params.limit !== undefined) search.set('limit', String(params.limit));
+      if (params.offset !== undefined) search.set('offset', String(params.offset));
+      const query = search.toString();
+      return request<OperationsActionItemList>(
+        `/insights/action-items${query ? `?${query}` : ''}`
+      );
+    },
   },
 
   documents: {
@@ -206,9 +234,18 @@ export const api = {
     members: () => request<MembersResponse>('/admin/members'),
   },
 
+  organization: {
+    members: () => request<MembersResponse>('/organization/members'),
+  },
+
   investigations: {
-    list: (params: { limit?: number; offset?: number } = {}) => {
+    list: (params: InvestigationListParams = {}) => {
       const search = new URLSearchParams();
+      if (params.status) search.set('status', params.status);
+      if (params.severity) search.set('severity', params.severity);
+      if (params.service) search.set('service', params.service);
+      if (params.q) search.set('q', params.q);
+      if (params.owner) search.set('owner', params.owner);
       if (params.limit !== undefined) search.set('limit', String(params.limit));
       if (params.offset !== undefined) search.set('offset', String(params.offset));
       const query = search.toString();
@@ -216,6 +253,16 @@ export const api = {
     },
     get: (id: string) =>
       request<InvestigationDetail>(`/investigations/${encodeURIComponent(id)}`),
+    create: (payload: CreateInvestigationInput) =>
+      request<InvestigationMutationResponse>('/investigations', {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      }),
+    update: (id: string, payload: UpdateInvestigationInput) =>
+      request<InvestigationDetail>(`/investigations/${encodeURIComponent(id)}`, {
+        method: 'PATCH',
+        body: JSON.stringify(payload),
+      }),
     timeline: (id: string) =>
       request<InvestigationTimeline>(
         `/investigations/${encodeURIComponent(id)}/timeline`
@@ -223,6 +270,101 @@ export const api = {
     analysis: (id: string) =>
       request<InvestigationAnalysisResult>(
         `/investigations/${encodeURIComponent(id)}/analysis`
+      ),
+    analyze: (id: string) =>
+      request<InvestigationAnalysisResult>(
+        `/investigations/${encodeURIComponent(id)}/analyze`,
+        { method: 'POST' }
+      ),
+    updateHypothesis: (id: string, hypothesisId: string, status: AnalysisHypothesis['status']) =>
+      request<{ hypothesis: AnalysisHypothesis }>(
+        `/investigations/${encodeURIComponent(id)}/hypotheses/${encodeURIComponent(hypothesisId)}`,
+        { method: 'PATCH', body: JSON.stringify({ status }) }
+      ),
+    collectEvidence: (id: string) =>
+      request<InvestigationMutationResponse>(
+        `/investigations/${encodeURIComponent(id)}/evidence/collect`,
+        { method: 'POST' }
+      ),
+    linkEvidence: (
+      id: string,
+      payload: { sourceType: 'document' | 'log' | 'ticket'; sourceId: string; reason?: string | null }
+    ) =>
+      request<InvestigationMutationResponse>(
+        `/investigations/${encodeURIComponent(id)}/evidence`,
+        { method: 'POST', body: JSON.stringify(payload) }
+      ),
+    unlinkEvidence: (id: string, evidenceId: string) =>
+      request<void>(
+        `/investigations/${encodeURIComponent(id)}/evidence/${encodeURIComponent(evidenceId)}`,
+        { method: 'DELETE' }
+      ),
+    createNote: (id: string, body: string) =>
+      request<{ activity: InvestigationDetail['activity'][number] }>(
+        `/investigations/${encodeURIComponent(id)}/notes`,
+        { method: 'POST', body: JSON.stringify({ body }) }
+      ),
+    createComment: (id: string, body: string) =>
+      request<{ activity: InvestigationDetail['activity'][number] }>(
+        `/investigations/${encodeURIComponent(id)}/comments`,
+        { method: 'POST', body: JSON.stringify({ body }) }
+      ),
+    listQuestions: (id: string) =>
+      request<{ questions: FollowUpAnswer[] }>(
+        `/investigations/${encodeURIComponent(id)}/questions`
+      ),
+    askQuestion: (id: string, question: string) =>
+      request<FollowUpAnswer>(
+        `/investigations/${encodeURIComponent(id)}/questions`,
+        { method: 'POST', body: JSON.stringify({ question }) }
+      ),
+  },
+
+  actionItems: {
+    list: (
+      investigationId: string,
+      params: {
+        status?: string;
+        priority?: string;
+        assignee?: string;
+        limit?: number;
+        offset?: number;
+      } = {}
+    ) => {
+      const search = new URLSearchParams();
+      if (params.status) search.set('status', params.status);
+      if (params.priority) search.set('priority', params.priority);
+      if (params.assignee) search.set('assignee', params.assignee);
+      if (params.limit !== undefined) search.set('limit', String(params.limit));
+      if (params.offset !== undefined) search.set('offset', String(params.offset));
+      const query = search.toString();
+      return request<ActionItemList>(
+        `/investigations/${encodeURIComponent(investigationId)}/action-items${
+          query ? `?${query}` : ''
+        }`
+      );
+    },
+    get: (investigationId: string, actionItemId: string) =>
+      request<ActionItemDetail>(
+        `/investigations/${encodeURIComponent(
+          investigationId
+        )}/action-items/${encodeURIComponent(actionItemId)}`
+      ),
+    create: (investigationId: string, payload: CreateActionItemInput) =>
+      request<ActionItemDetail>(
+        `/investigations/${encodeURIComponent(investigationId)}/action-items`,
+        { method: 'POST', body: JSON.stringify(payload) }
+      ),
+    update: (
+      investigationId: string,
+      actionItemId: string,
+      payload: UpdateActionItemInput
+    ) =>
+      request<ActionItemDetail>(
+        `/investigations/${encodeURIComponent(
+          investigationId
+        )}/action-items/${encodeURIComponent(actionItemId)}`,
+        { method: 'PATCH', body: JSON.stringify(payload) }
       ),
   },
 };

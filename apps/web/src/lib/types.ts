@@ -220,6 +220,9 @@ export interface Investigation {
   windowEnd: string | null;
   sourceTypes: InvestigationSourceType[] | null;
   resolutionSummary: string | null;
+  /** null means unassigned; never inferred from the creator. */
+  ownerUserId: string | null;
+  ownerEmail: string | null;
   createdBy: string;
   createdByEmail: string | null;
   resolvedAt: string | null;
@@ -332,4 +335,275 @@ export interface AnalysisHypothesis {
 export interface InvestigationAnalysisResult {
   analysis: InvestigationAnalysis | null;
   hypotheses: AnalysisHypothesis[];
+}
+
+export interface EvidenceCollectionSummary {
+  failed: boolean;
+  queries: string[];
+  added: number;
+  existing: number;
+  filteredOut: number;
+  withheld: number;
+  warnings: string[];
+}
+
+/** Detail plus the summary of the collection that ran with the request. */
+export interface InvestigationMutationResponse extends InvestigationDetail {
+  collection?: EvidenceCollectionSummary | null;
+  added?: boolean;
+}
+
+export interface CreateInvestigationInput {
+  title: string;
+  description: string;
+  severity?: InvestigationSeverity;
+  service?: string | null;
+  errorSignature?: string | null;
+  windowStart?: string | null;
+  windowEnd?: string | null;
+  sourceTypes?: InvestigationSourceType[] | null;
+  ownerUserId?: string | null;
+  collectEvidence?: boolean;
+}
+
+export interface UpdateInvestigationInput {
+  title?: string;
+  description?: string;
+  severity?: InvestigationSeverity;
+  service?: string | null;
+  errorSignature?: string | null;
+  windowStart?: string | null;
+  windowEnd?: string | null;
+  sourceTypes?: InvestigationSourceType[] | null;
+  ownerUserId?: string | null;
+  status?: InvestigationStatus;
+  resolutionSummary?: string | null;
+  expectedUpdatedAt?: string;
+}
+
+export type InvestigationOwnerFilter = 'me' | 'unassigned' | string;
+
+export interface InvestigationListParams {
+  status?: InvestigationStatus;
+  severity?: InvestigationSeverity;
+  service?: string;
+  q?: string;
+  owner?: InvestigationOwnerFilter;
+  limit?: number;
+  offset?: number;
+}
+
+export interface FollowUpCitation {
+  evidenceId: string;
+  sourceType: InvestigationSourceType;
+  sourceTitle: string;
+  relevance: EvidenceRelevance;
+  sourceCreatedAt: string | null;
+}
+
+export interface FollowUpAnswer {
+  activityId: string;
+  question: string;
+  answer: string;
+  confidence: 'high' | 'medium' | 'low';
+  insufficientContext: boolean;
+  citations: FollowUpCitation[];
+  analysisId: string | null;
+  model: string;
+  provider: string;
+  generationMs: number;
+  createdAt: string;
+}
+
+/* ------------------------------------------------------------------ */
+/* Action items                                                        */
+/* ------------------------------------------------------------------ */
+
+export type ActionItemStatus = 'open' | 'in_progress' | 'blocked' | 'completed';
+export type ActionItemPriority = 'low' | 'medium' | 'high' | 'critical';
+export type ActionItemCreatedFrom = 'manual' | 'analysis';
+
+/**
+ * Follow-up work attached to one investigation. `createdFrom` distinguishes a
+ * person's own item from one accepted from an analysis suggestion; it never means
+ * the model created, executed or completed the work.
+ */
+export interface ActionItem {
+  id: string;
+  organizationId: string;
+  investigationId: string;
+  title: string;
+  description: string | null;
+  status: ActionItemStatus;
+  priority: ActionItemPriority;
+  /** null means unassigned; never inferred from the creator. */
+  assigneeUserId: string | null;
+  assigneeEmail: string | null;
+  dueAt: string | null;
+  blockedReason: string | null;
+  completedAt: string | null;
+  completedBy: string | null;
+  completedByEmail: string | null;
+  createdFrom: ActionItemCreatedFrom;
+  sourceAnalysisId: string | null;
+  sourceHypothesisId: string | null;
+  /** Immutable snapshot of the suggestion the item came from. */
+  sourceLabel: string | null;
+  createdBy: string;
+  createdByEmail: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type ActionItemEventType =
+  | 'created'
+  | 'status_change'
+  | 'assignee_change'
+  | 'priority_change'
+  | 'due_change'
+  | 'details_change';
+
+export interface ActionItemEvent {
+  id: string;
+  type: ActionItemEventType;
+  actorUserId: string | null;
+  actorEmail: string | null;
+  body: string | null;
+  metadata: Record<string, unknown> | null;
+  createdAt: string;
+}
+
+export interface ActionItemDetail {
+  item: ActionItem;
+  events: ActionItemEvent[];
+}
+
+export interface ActionItemSummary {
+  total: number;
+  open: number;
+  inProgress: number;
+  blocked: number;
+  completed: number;
+  overdue: number;
+}
+
+export interface ActionItemList {
+  items: ActionItem[];
+  summary: ActionItemSummary;
+  limit: number;
+  offset: number;
+}
+
+export interface CreateActionItemInput {
+  title: string;
+  description?: string | null;
+  priority?: ActionItemPriority;
+  assigneeUserId?: string | null;
+  dueAt?: string | null;
+  createdFrom?: ActionItemCreatedFrom;
+  sourceAnalysisId?: string | null;
+  sourceHypothesisId?: string | null;
+  sourceLabel?: string | null;
+}
+
+export interface UpdateActionItemInput {
+  title?: string;
+  description?: string | null;
+  priority?: ActionItemPriority;
+  assigneeUserId?: string | null;
+  dueAt?: string | null;
+  status?: ActionItemStatus;
+  blockedReason?: string | null;
+  expectedUpdatedAt?: string;
+}
+
+/* ------------------------------------------------------------------ */
+/* Operational overview                                                */
+/* ------------------------------------------------------------------ */
+
+export interface OperationsInvestigationRef {
+  id: string;
+  title: string;
+  status: InvestigationStatus;
+  severity: InvestigationSeverity;
+  ownerUserId: string | null;
+  ownerEmail: string | null;
+  updatedAt: string;
+  resolvedAt: string | null;
+}
+
+export interface OperationsActionItemRef {
+  id: string;
+  title: string;
+  status: ActionItemStatus;
+  priority: ActionItemPriority;
+  assigneeUserId: string | null;
+  assigneeEmail: string | null;
+  dueAt: string | null;
+  investigationId: string;
+  investigationTitle: string;
+  completedAt: string | null;
+  updatedAt: string;
+}
+
+export interface OperationsActionItemSummary extends ActionItemSummary {
+  /** Unfinished and due within `dueSoonHours`. */
+  dueSoon: number;
+  assignedToMe: number;
+  unassigned: number;
+}
+
+export interface OperationsOverview {
+  dueSoonHours: number;
+  investigations: {
+    total: number;
+    open: number;
+    investigating: number;
+    resolved: number;
+    closed: number;
+    assignedToMe: number;
+    unassigned: number;
+    byStatus: Record<string, number>;
+    bySeverity: Record<string, number>;
+    recentlyUpdated: OperationsInvestigationRef[];
+    recentlyResolved: OperationsInvestigationRef[];
+  };
+  actionItems: {
+    summary: OperationsActionItemSummary;
+    byStatus: Record<string, number>;
+    byPriority: Record<string, number>;
+    recentlyCompleted: OperationsActionItemRef[];
+  };
+}
+
+/** An action item from the organization-wide queue, with its investigation. */
+export interface OperationsActionItem extends ActionItem {
+  investigationTitle: string;
+}
+
+export interface OperationsActionItemList {
+  items: OperationsActionItem[];
+  /** Organization-wide totals, independent of the active filters. */
+  summary: OperationsActionItemSummary;
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+export interface OperationsActionItemParams {
+  status?: ActionItemStatus;
+  priority?: ActionItemPriority;
+  assignee?: 'me' | 'unassigned' | string;
+  due?: 'overdue' | 'due_soon';
+  investigationId?: string;
+  limit?: number;
+  offset?: number;
+}
+
+/** A suggestion a person can accept; it does not become an item until submitted. */
+export interface ActionItemSuggestion {
+  title: string;
+  sourceAnalysisId: string | null;
+  sourceHypothesisId: string | null;
+  sourceLabel: string;
 }
