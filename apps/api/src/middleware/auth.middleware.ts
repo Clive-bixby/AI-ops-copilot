@@ -38,7 +38,12 @@ export function authMiddleware(
   }
 
   try {
-    const decoded = jwt.verify(token, jwtSecret) as DecodedToken;
+    // Pin the algorithm. Verification without `algorithms` accepts any HMAC
+    // variant the secret happens to validate, which is a needless degree of
+    // freedom on the one check that stands between a request and a user.
+    const decoded = jwt.verify(token, jwtSecret, {
+      algorithms: ["HS256"],
+    }) as DecodedToken;
 
     if (!decoded || typeof decoded.userId !== "string") {
       return res.status(401).json({ error: "Unauthorized" });

@@ -381,14 +381,45 @@ State these on the product itself rather than discovering them in a demo:
 
 ## 12. Security settings that are not optional in production
 
-- `JWT_SECRET` is not the compose placeholder. Generate it; never commit it.
+- `JWT_SECRET` must be at least 32 characters and not a placeholder. The API now
+  **refuses to start** in production otherwise, because a known signing key lets
+  anyone mint a token for any user. Generate one with `openssl rand -hex 32`.
+- `JWT_EXPIRES_IN` defaults to `1d`. A token cannot be revoked before it expires,
+  so a long lifetime is a long window for a stolen one.
 - `CORS_ORIGINS` is an explicit list. There is no wildcard support, and an empty
   value blocks all cross-origin browser access.
-- `TRUST_PROXY=1` whenever a router or proxy sits in front of the API, or the
-  rate limiters protect the proxy instead of the users.
+- `TRUST_PROXY` takes a **hop count** (`1` for one platform router) or an address
+  list. Without it every client shares the proxy's IP, so one rate-limit bucket
+  covers everyone. `TRUST_PROXY=true` is refused on purpose: it would trust a
+  client-supplied `X-Forwarded-For` and let anyone skip the limiter.
 - `ENABLE_DEV_ENDPOINTS=false`. The `/ai/test-*` routes stay dark.
 - `HEALTH_DETAIL=false` unless you are debugging: the detail can name internal
   hosts and ports.
 - Keep `DB_POOL_MAX` below the provider's connection cap.
 - Rotate `JWT_SECRET` by redeploying: every existing session is invalidated, which
   is the intended effect and the only revocation mechanism today.
+
+---
+
+## 13. Known security limitations
+
+Stated plainly so nobody assumes a guarantee this system does not make:
+
+- **The browser keeps the token in `localStorage`.** Any script that runs on the
+  page can read it. Helmet and a static bundle with no third-party scripts reduce
+  the exposure; moving the token to an `HttpOnly` cookie is the real fix and it
+  changes the CSRF story, so it is a decided trade-off, not an oversight.
+- **No revocation, no refresh tokens.** A token is valid until it expires (one day
+  by default). Disabling an account does not invalidate the tokens already issued
+  to it; rotating `JWT_SECRET` invalidates all of them.
+- **No MFA, no password reset, no email verification.** Registration is open to
+  anyone who can reach the API. That is deliberate for a demo deployment; a real
+  one needs an invitation or a verified domain in front of it.
+- **Rate limits are per process.** One instance means one bucket; two instances
+  behind a balancer would each allow the full budget. A shared store (Redis) is
+  the fix when that matters.
+- **No WAF, no IP reputation, no request signing.** The API trusts the transport
+  and the platform's TLS. Upload size, JSON body size and query length are
+  bounded, which is the part that protects memory, not availability.
+- **Uploads are validated by extension, not content.** A `.pdf` that is not a PDF
+  fails in the parser with a recorded reason; it is not executed or served back.

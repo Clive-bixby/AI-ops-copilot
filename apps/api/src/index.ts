@@ -4,7 +4,17 @@ import { logger } from "./core/logger.js";
 import { pool } from "./core/db.js";
 import { closeQueues } from "./core/queue.js";
 import { resolveAllowedOrigins } from "./config/security.js";
+import { assertUsableJwtSecret } from "./config/secrets.js";
 import { createApp } from "./app.js";
+
+// Refuse to serve with a secret that cannot protect a token. A deployment that
+// starts anyway looks healthy while every account is forgeable.
+try {
+  assertUsableJwtSecret();
+} catch (error) {
+  logger.error("config.startup_refused", { error });
+  process.exit(1);
+}
 
 const PORT = Number(process.env.PORT || 3000);
 const allowedOrigins = resolveAllowedOrigins();

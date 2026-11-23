@@ -23,7 +23,12 @@ type LoginResult = {
 };
 
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-const PASSWORD_MIN_LENGTH = 6;
+/**
+ * Six characters was the previous floor, which allows "123456". bcrypt at cost 12
+ * makes guessing slow, but it cannot save a password that is one of the first
+ * fifty an attacker tries.
+ */
+const PASSWORD_MIN_LENGTH = 10;
 const SALT_ROUNDS = 12;
 
 export class AuthValidationError extends Error {}
@@ -105,7 +110,12 @@ export async function register(input: RegisterInput): Promise<RegisterResult> {
         role: membership.role,
       },
       jwtSecret,
-      { expiresIn: process.env.JWT_EXPIRES_IN || "7d" }
+      {
+        algorithm: "HS256",
+        // Tokens cannot be revoked before they expire, so a week is a long time
+        // to honour a stolen one. A day matches the compose default.
+        expiresIn: process.env.JWT_EXPIRES_IN || "1d",
+      }
     );
 
     return {
@@ -208,7 +218,10 @@ export async function login(input: LoginInput): Promise<LoginResult> {
       role: user.role
     },
     jwtSecret,
-    { expiresIn: process.env.JWT_EXPIRES_IN || "7d" }
+    {
+      algorithm: "HS256",
+      expiresIn: process.env.JWT_EXPIRES_IN || "1d",
+    }
   );
 
   return { token };

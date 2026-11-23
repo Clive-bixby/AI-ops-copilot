@@ -1,6 +1,7 @@
 import type { NextFunction, Request, Response } from "express";
 
 import { pool } from "../core/db.js";
+import { isUuid } from "../utils/uuid.js";
 
 type MembershipRole = "owner" | "admin" | "member";
 
@@ -18,12 +19,18 @@ export async function orgMiddleware(
   res: Response,
   next: NextFunction
 ) {
-  const orgId = req.header("x-organization-id");
+  const orgId = req.header("x-organization-id")?.trim();
 
   if (!orgId) {
     return res.status(400).json({
       error: "Organization ID header missing",
     });
+  }
+
+  // Without this the value reaches a `uuid` column and Postgres raises a cast
+  // error, so a typo in a header became a logged 500 instead of a 400.
+  if (!isUuid(orgId)) {
+    return res.status(400).json({ error: "Invalid organization ID" });
   }
 
   const userId = req.user?.id;

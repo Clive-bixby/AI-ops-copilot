@@ -178,7 +178,7 @@ export function Login() {
                   placeholder="••••••••"
                 />
                 {mode === 'register' ? (
-                  <span className="font-body text-body-sm text-outline">At least 6 characters.</span>
+                  <span className="font-body text-body-sm text-outline">At least 10 characters.</span>
                 ) : null}
               </label>
 

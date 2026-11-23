@@ -63,10 +63,11 @@ services:
       # The bundled Postgres does not terminate TLS.
       DATABASE_SSL: "false"
       REDIS_URL: redis://redis:6379
-      # Local default only. Runbook: set JWT_SECRET in .env before sharing a
-      # deployment with anyone.
-      JWT_SECRET: ${JWT_SECRET:-change-me-in-production}
-      JWT_EXPIRES_IN: ${JWT_EXPIRES_IN:-7d}
+      # No default: the API refuses to start in production with a missing or
+      # placeholder signing key, because a known key lets anyone mint a token for
+      # any user. Generate one with `openssl rand -hex 32`.
+      JWT_SECRET: "${JWT_SECRET:?JWT_SECRET must be set; generate one with: openssl rand -hex 32}"
+      JWT_EXPIRES_IN: ${JWT_EXPIRES_IN:-1d}
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
       GEMINI_MODEL: ${GEMINI_MODEL:-gemini-2.5-flash-lite}
       # Overridable so a gateway or proxy can sit in front of Gemini.

@@ -7,7 +7,12 @@ import { envBool } from "./config/env.js";
 import { pool } from "./core/db.js";
 import { logger } from "./core/logger.js";
 import { pingRedis } from "./core/queue.js";
-import { JSON_BODY_LIMIT, resolveAllowedOrigins } from "./config/security.js";
+import {
+  ENABLE_DEV_ENDPOINTS,
+  JSON_BODY_LIMIT,
+  resolveAllowedOrigins,
+  resolveTrustProxy,
+} from "./config/security.js";
 import authRouter from "./modules/auth/auth.routes.js";
 import { authMiddleware } from "./middleware/auth.middleware.js";
 import { errorMiddleware } from "./middleware/error.middleware.js";
@@ -131,9 +136,10 @@ export function createApp(options: CreateAppOptions = {}): express.Express {
   const allowedOrigins = resolveAllowedOrigins();
 
   // Behind a reverse proxy the client IP lives in X-Forwarded-For; without this,
-  // rate limiting would key every client on the proxy address.
-  const trustProxy = process.env.TRUST_PROXY?.trim();
-  if (trustProxy) {
+  // rate limiting would key every client on the proxy address. The value is
+  // parsed to a hop count because Express reads a string as an address list.
+  const trustProxy = resolveTrustProxy();
+  if (trustProxy !== false) {
     app.set("trust proxy", trustProxy);
   }
 
@@ -223,9 +229,13 @@ export function createApp(options: CreateAppOptions = {}): express.Express {
   app.use("/ingestion", ingestionRouter);
   app.use("/investigations", investigationsRouter);
 
-  app.get("/protected", authMiddleware, (req, res) => {
-    res.json({ message: "You are authenticated" });
-  });
+  // Smoke route for hand-testing the auth chain. It carries no product value, so
+  // it stays dark like the other development endpoints.
+  if (ENABLE_DEV_ENDPOINTS) {
+    app.get("/protected", authMiddleware, (req, res) => {
+      res.json({ message: "You are authenticated" });
+    });
+  }
 
   // Order matters: unknown routes get a JSON 404, and the error handler is last
   // so it can catch failures from every route above it.

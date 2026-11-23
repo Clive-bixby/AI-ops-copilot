@@ -44,6 +44,66 @@ export function resolveAllowedOrigins(): string[] {
 /** Largest JSON request body accepted, e.g. a batch of ingested logs. */
 export const JSON_BODY_LIMIT = process.env.JSON_BODY_LIMIT?.trim() || "1mb";
 
+/**
+ * Express `trust proxy` value, parsed from the environment.
+ *
+ * The raw variable is a string, and Express treats a string as an address list,
+ * not as a hop count: `TRUST_PROXY=1` trusted nothing, so `req.ip` stayed the
+ * proxy's address, `req.protocol` stayed "http", and every client shared one
+ * rate-limit bucket. A bare integer has to become a number to mean "the last N
+ * proxies are trusted".
+ *
+ * `true` is refused on purpose: it trusts an `X-Forwarded-For` header from anyone,
+ * which lets a client forge its own address and walk past the rate limiter.
+ */
+export function resolveTrustProxy(): number | string[] | false {
+  const raw = (process.env.TRUST_PROXY ?? "").trim();
+
+  if (!raw) {
+    return false;
+  }
+
+  if (/^\d+$/.test(raw)) {
+    const hops = Number(raw);
+
+    if (hops === 0) {
+      return false;
+    }
+
+    if (hops > 10) {
+      console.warn(
+        `TRUST_PROXY=${raw} trusts ${hops} hops; that is almost certainly a mistake. Using 1.`
+      );
+      return 1;
+    }
+
+    return hops;
+  }
+
+  if (raw.toLowerCase() === "true") {
+    console.warn(
+      "TRUST_PROXY=true trusts any X-Forwarded-For header, so clients could spoof their address and bypass rate limits. Ignoring it; set a hop count (e.g. 1) or an address list instead."
+    );
+    return false;
+  }
+
+  if (raw.toLowerCase() === "false") {
+    return false;
+  }
+
+  // An explicit list of proxy addresses or CIDR ranges, e.g. "10.0.0.0/8,172.16.0.0/12".
+  const entries = raw
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+
+  if (entries.length === 0) {
+    return false;
+  }
+
+  return entries;
+}
+
 /** Test-only /ai/test-* routes stay dark unless this is explicitly enabled. */
 export const ENABLE_DEV_ENDPOINTS =
   process.env.ENABLE_DEV_ENDPOINTS?.trim().toLowerCase() === "true";

@@ -74,7 +74,9 @@ existing migrations as applied without touching your data.
 ## Quick start (Docker)
 
 ```bash
-cp .env.example .env      # optional: override credentials, tokens, API URL
+cp .env.example .env      # overrides for credentials, tokens, API URL
+# The stack refuses a placeholder signing key. Set JWT_SECRET in .env:
+#   openssl rand -hex 32
 docker compose up --build
 ```
 
