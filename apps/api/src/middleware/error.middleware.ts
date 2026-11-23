@@ -39,6 +39,7 @@ import {
   IdempotencyConflictError,
   IdempotencyKeyError,
 } from "../modules/ingestion/idempotency.service.js";
+import { MembershipValidationError } from "../modules/organization/organization.service.js";
 
 type ErrorClass = new (...args: any[]) => Error;
 
@@ -74,6 +75,7 @@ const STATUS_RULES: ReadonlyArray<readonly [ErrorClass, number]> = [
   [IdempotencyKeyError, 400],
   [IdempotencyConflictError, 409],
   [InvestigationValidationError, 400],
+  [MembershipValidationError, 400],
   [AnalysisFormatError, 400],
   [FollowUpFormatError, 400],
   // A malformed id and an id owned by another organization answer the same 404.

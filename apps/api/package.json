@@ -6,6 +6,7 @@
   "main": "index.js",
   "scripts": {
     "test": "tsx --test \"src/**/*.test.ts\"",
+    "test:integration": "tsx --test --test-concurrency=1 \"src/**/*.itest.ts\"",
     "dev": "tsx watch src/index.ts",
     "start": "tsx src/index.ts",
     "worker": "tsx src/workers/ingestion.worker.ts",

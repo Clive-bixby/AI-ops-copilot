@@ -15,8 +15,6 @@ const migrationsDir = path.resolve(
 // Arbitrary constant; only used to serialise concurrent migration runs.
 const ADVISORY_LOCK_ID = 914_570_221;
 
-const baseline = process.argv.includes("--baseline");
-
 const LEDGER_SQL = `
   CREATE TABLE IF NOT EXISTS schema_migrations (
     filename TEXT PRIMARY KEY,
@@ -24,6 +22,15 @@ const LEDGER_SQL = `
     applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
   );
 `;
+
+export type MigrationResult = {
+  /** Migrations actually executed in this run. */
+  applied: number;
+  /** Migrations recorded without executing them (baseline mode). */
+  recorded: number;
+  /** Migrations that were already applied with a matching checksum. */
+  skipped: number;
+};
 
 function checksum(sql: string): string {
   return createHash("sha256").update(sql).digest("hex");
@@ -49,9 +56,21 @@ function readMigrations(): { filename: string; sql: string }[] {
   }));
 }
 
-async function main(): Promise<void> {
+/**
+ * Apply every pending migration in filename order.
+ *
+ * Exported so integration tests migrate the test database through exactly the
+ * same code path as a deployment; a test-only migration runner would be able to
+ * drift from the real one. The pool is left open because the caller owns it.
+ */
+export async function runMigrations(
+  options: { baseline?: boolean; quiet?: boolean } = {}
+): Promise<MigrationResult> {
+  const baseline = options.baseline === true;
+  const log = options.quiet === true ? () => undefined : console.log;
   const migrations = readMigrations();
   const client = await pool.connect();
+  const result: MigrationResult = { applied: 0, recorded: 0, skipped: 0 };
 
   try {
     await client.query(LEDGER_SQL);
@@ -63,8 +82,6 @@ async function main(): Promise<void> {
     const applied = new Map(
       ledger.rows.map((row) => [row.filename, row.checksum])
     );
-
-    let pending = 0;
 
     for (const migration of migrations) {
       const digest = checksum(migration.sql);
@@ -78,18 +95,18 @@ async function main(): Promise<void> {
           );
         }
 
-        console.log(`skip    ${migration.filename} (already applied)`);
+        result.skipped += 1;
+        log(`skip    ${migration.filename} (already applied)`);
         continue;
       }
-
-      pending += 1;
 
       if (baseline) {
         await client.query(
           "INSERT INTO schema_migrations (filename, checksum) VALUES ($1, $2)",
           [migration.filename, digest]
         );
-        console.log(`record  ${migration.filename} (baseline, not executed)`);
+        result.recorded += 1;
+        log(`record  ${migration.filename} (baseline, not executed)`);
         continue;
       }
 
@@ -101,7 +118,8 @@ async function main(): Promise<void> {
           [migration.filename, digest]
         );
         await client.query("COMMIT");
-        console.log(`apply   ${migration.filename}`);
+        result.applied += 1;
+        log(`apply   ${migration.filename}`);
       } catch (error) {
         await client.query("ROLLBACK");
         throw new Error(
@@ -112,25 +130,36 @@ async function main(): Promise<void> {
       }
     }
 
-    if (pending === 0) {
-      console.log("Database schema is up to date.");
+    if (result.applied === 0 && result.recorded === 0) {
+      log("Database schema is up to date.");
     } else if (baseline) {
-      console.log(
-        `Recorded ${pending} migration(s) as applied without executing them.`
+      log(
+        `Recorded ${result.recorded} migration(s) as applied without executing them.`
       );
     } else {
-      console.log(`Applied ${pending} migration(s).`);
+      log(`Applied ${result.applied} migration(s).`);
     }
+
+    return result;
   } finally {
     await client
       .query("SELECT pg_advisory_unlock($1)", [ADVISORY_LOCK_ID])
       .catch(() => undefined);
     client.release();
-    await pool.end();
   }
 }
 
-main().catch((error: unknown) => {
-  console.error(error instanceof Error ? error.message : error);
-  process.exitCode = 1;
-});
+const isDirectRun =
+  process.argv[1] !== undefined &&
+  path.resolve(process.argv[1]) === path.resolve(fileURLToPath(import.meta.url));
+
+if (isDirectRun) {
+  runMigrations({ baseline: process.argv.includes("--baseline") })
+    .catch((error: unknown) => {
+      console.error(error instanceof Error ? error.message : error);
+      process.exitCode = 1;
+    })
+    .finally(() => {
+      void pool.end();
+    });
+}
