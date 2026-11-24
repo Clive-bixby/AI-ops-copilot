@@ -1,4 +1,8 @@
-import { LlmProviderError, LlmTimeoutError } from "./llm/errors.js";
+import {
+  LlmConfigError,
+  LlmProviderError,
+  LlmTimeoutError,
+} from "./llm/errors.js";
 import { getLlmProvider } from "./llm/index.js";
 
 import { estimateTokens } from "./chunk.service.js";
@@ -517,6 +521,34 @@ function buildNoContextResponse(input: {
   };
 }
 
+/**
+ * Map a generation-layer failure onto the endpoint's existing contract.
+ *
+ * The endpoint has always answered 502 for "the provider could not answer" and
+ * 504 for "it was too slow", and the error middleware maps classes rather than
+ * messages. Without the configuration branch a missing key falls through to the
+ * generic handler and becomes a 500 -- a regression, because a missing key used
+ * to be a 502 that named the variable.
+ */
+export function mapAnswerProviderError(error: unknown): Error {
+  if (error instanceof LlmTimeoutError) {
+    return new RAGProviderTimeoutError("The answer provider timed out");
+  }
+
+  if (error instanceof LlmConfigError) {
+    // The message names the variable; it never contains its value.
+    return new RAGProviderError(error.message);
+  }
+
+  if (error instanceof LlmProviderError) {
+    return new RAGProviderError(
+      `The answer provider request failed: ${error.message}`
+    );
+  }
+
+  return error instanceof Error ? error : new Error(String(error));
+}
+
 async function generateAnswer(prompt: string): Promise<{
   answer: string;
   model: string;
@@ -544,19 +576,7 @@ async function generateAnswer(prompt: string): Promise<{
       generationMs: elapsedMs(startedAt),
     };
   } catch (error) {
-    // The endpoint's existing contract is a 504 for a slow provider and a 502
-    // for a failing one; the provider-agnostic errors are mapped back onto it.
-    if (error instanceof LlmTimeoutError) {
-      throw new RAGProviderTimeoutError("The answer provider timed out");
-    }
-
-    if (error instanceof LlmProviderError) {
-      throw new RAGProviderError(
-        `The answer provider request failed: ${error.message}`
-      );
-    }
-
-    throw error;
+    throw mapAnswerProviderError(error);
   }
 }
 

@@ -1,7 +1,14 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-import { fromRetrievedChunk, selectPromptChunks } from "./rag.service.js";
+import {
+  RAGProviderError,
+  RAGProviderTimeoutError,
+  fromRetrievedChunk,
+  mapAnswerProviderError,
+  selectPromptChunks,
+} from "./rag.service.js";
+import { LlmConfigError, LlmProviderError, LlmTimeoutError } from "./llm/errors.js";
 import type { CitationSource } from "./retrieval.service.js";
 
 function citation(overrides: Partial<CitationSource>): CitationSource {
@@ -95,5 +102,42 @@ describe("fromRetrievedChunk", () => {
     assert.equal(chunk.sourceType, "log");
     assert.equal(chunk.sourceId, "log-1");
     assert.equal(chunk.content, "connection pool exhausted");
+  });
+});
+
+describe("mapAnswerProviderError", () => {
+  // A missing key is a deployment misconfiguration, not a crash: /ai/ask has
+  // always answered 502 with the variable named, and a generic 500 would hide
+  // the one sentence that fixes it.
+  it("turns a missing key into the provider error, not a 500", () => {
+    const mapped = mapAnswerProviderError(
+      new LlmConfigError("GEMINI_API_KEY is required to generate an answer")
+    );
+
+    assert.ok(mapped instanceof RAGProviderError);
+    assert.ok(!(mapped instanceof RAGProviderTimeoutError));
+    assert.match(mapped.message, /GEMINI_API_KEY/);
+  });
+
+  it("keeps a slow provider mapped to the timeout error", () => {
+    assert.ok(
+      mapAnswerProviderError(new LlmTimeoutError("no answer in time")) instanceof
+        RAGProviderTimeoutError
+    );
+  });
+
+  it("maps a provider failure onto the provider error with its message", () => {
+    const mapped = mapAnswerProviderError(
+      new LlmProviderError("The generation provider is rate limiting this deployment (429).", 429)
+    );
+
+    assert.ok(mapped instanceof RAGProviderError);
+    assert.match(mapped.message, /rate limiting/);
+  });
+
+  it("passes an unrelated error through unchanged", () => {
+    const original = new Error("database went away");
+
+    assert.equal(mapAnswerProviderError(original), original);
   });
 });
