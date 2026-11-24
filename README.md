@@ -118,6 +118,33 @@ bundle at build time, so rebuild the web image afterwards.
 Compose defaults (database password, `JWT_SECRET`) are placeholders for local
 use. Set real values in `.env` before putting the stack anywhere shared.
 
+## Demo data
+
+A fresh deployment is empty, and an empty product demonstrates nothing. With the
+API and the worker running:
+
+```bash
+node scripts/seed-demo.mjs                          # API at http://localhost:3000
+API_URL=https://your-api node scripts/seed-demo.mjs # another deployment
+```
+
+It registers `demo@opspilot.dev` / `OpsPilot!Demo2026` in an organization called
+"Northwind Ops (Demo)", uploads six runbooks, ingests 14 tickets and 32 log
+events, and creates three investigations with action items in every state
+(completed, in progress, blocked and overdue). Every row goes through the
+production ingestion path, so the worker parses, chunks and embeds the documents
+instead of inserting rows behind its back.
+
+Two prerequisites: the worker must be running, and the API needs an embedding
+provider that can embed text it has never seen — Ollama by default, or any
+`openai-compatible` service. `fixture` mode replays recorded vectors only, so it
+can serve a seeded corpus but cannot ingest one.
+
+Re-running is safe: existing documents, tickets, logs and investigations are
+skipped and action-item statuses are repaired. `--force` re-ingests tickets and
+logs. The script ends with a verification summary: row counts, the operations
+overview and a search that should return hits.
+
 ## Deploying
 
 [`docs/deployment.md`](docs/deployment.md) covers a **$0** deployment: one

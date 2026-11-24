@@ -239,8 +239,17 @@ the vectors.
 ## 8. Repository state
 
 - Phase 4 is committed on `main` as focused commits per concern.
-- `.github/workflows/ci.yml` runs typecheck, unit tests, the integration suite
-  against `pgvector/pgvector:pg16`, the investigation evaluation with the
-  embedding fixture stub, and the web build.
+- Phase 5 (production readiness) followed it, also on `main`: a bounded pool and
+  graceful shutdown, a selectable embedding provider, the single-container
+  topology and static web server, the security hardening, ingestion recovery and
+  observability, and the CI gates below.
+- `.github/workflows/ci.yml` runs the API typecheck and unit tests, the
+  integration suite against `pgvector/pgvector:pg16`, the investigation
+  evaluation with the embedding fixture stub, the web typecheck and build, a
+  build of both Docker images, a dependency audit, and an end-to-end check that
+  starts the compose stack and ingests a document through the worker. See §15 of
+  [the deployment notes](deployment.md#15-what-ci-checks-before-a-change-reaches-a-deployment).
+- `apps/web` lints without errors. The seed script for a demo tenant lives in
+  `scripts/seed-demo.mjs`; `docs/deployment.md` covers deploying and seeding.
 - `.kilo/` and `stitch_opspilot_ai_product_redesign/` are untouched and remain
   uncommitted.

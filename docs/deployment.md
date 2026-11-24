@@ -250,6 +250,19 @@ ingest. Two details cost an hour if you do not know them: the register response
 is only `{ token }`, and every tenant-scoped route needs the organization id in
 an `x-organization-id` header (the middleware does not fall back to the token).
 
+The repository ships `scripts/seed-demo.mjs`, which does the whole job against a
+running deployment — account, six runbooks, tickets, logs and three
+investigations — and finishes with a verification summary:
+
+```bash
+API_URL=https://your-api node scripts/seed-demo.mjs
+```
+
+It needs the worker running and an embedding provider that can embed new text
+(`ollama` or `openai-compatible`); `fixture` replays recorded vectors only. The
+curl steps below are the same sequence by hand, kept because they show exactly
+where those two mistakes bite, and because a deploy box may not have the repo.
+
 ```bash
 API=https://your-api
 
