@@ -401,9 +401,9 @@ export const llmEvaluationCases: LlmCase[] = [
     investigation: DEPLOY,
     evidence: deployEvidence,
     question: "Was the rollback started before or after the image pull failures?",
-    expectedFacts: [
-      { label: "timeline is used", anyOf: ["09:58", "10:03", "after the", "before the"] },
-    ],
+    // Only the two real times count. "before the" / "after the" appear in the
+    // question itself, so a model that simply restates it would score a hit.
+    expectedFacts: [{ label: "timeline from timestamps", anyOf: ["09:58", "10:03"] }],
     forbiddenEntities: ["Redis", "Kafka"],
     allowedNumbers: [],
     mustBeInsufficient: false,

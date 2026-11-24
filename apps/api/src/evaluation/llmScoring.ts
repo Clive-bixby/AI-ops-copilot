@@ -74,20 +74,30 @@ export const NO_CONTEXT_ANSWER = "No reliable operational context found.";
 /** Uppercase identifiers ("PGPOOL_MAX") plus capitalised names are the usual hallucinations. */
 // A number may be followed by a unit ("500ms") but must not be part of an
 // identifier ("p95", "v2.1"), where the digits are a name rather than a claim.
-const NUMBER_PATTERN = /(?<![\w.])\d+(?:[.:]\d+)?/g;
+// A colon is deliberately not a decimal separator: "09:58:00" is a time, and
+// reading it as the number "58:00" flags a correct answer as invented.
+const NUMBER_PATTERN = /(?<![\w.])\d+(?:\.\d+)?/g;
 
 function normalise(text: string): string {
   return text.toLowerCase().replace(/\s+/g, " ");
 }
 
-// `E1` for investigations, `Source 1` for RAG answers.
-const CITATION_LABEL_PATTERN = /\bE\d+\b|\bSource \d+\b/gi;
+// `E1` for investigations; `Source 1` for RAG answers, which models also write
+// as `[1]`. Both spellings mean the same thing, so both are recognised and the
+// bracketed form is reported in the canonical one.
+const CITATION_LABEL_PATTERN = /\bE\d+\b|\bSources? \d+\b|\[\d+\]/gi;
+
+function canonicalCitation(label: string): string {
+  const bracketed = /^\[(\d+)\]$/.exec(label.trim());
+
+  return bracketed ? `Source ${bracketed[1]}` : label.trim().replace(/\s+/g, " ");
+}
 
 /** Labels the prompt asked for. */
 export function extractCitationLabels(text: string): string[] {
   const matches = text.match(CITATION_LABEL_PATTERN) ?? [];
 
-  return [...new Set(matches.map((label) => label.trim().replace(/\s+/g, " ")))];
+  return [...new Set(matches.map(canonicalCitation))];
 }
 
 function normaliseLabel(label: string): string {
@@ -101,7 +111,12 @@ function factPresent(text: string, fact: ExpectedFact): boolean {
 }
 
 export function numbersInText(text: string): string[] {
-  return [...new Set(text.match(NUMBER_PATTERN) ?? [])];
+  // "12,000" and "12000" are the same claim. Formatting a number with a
+  // thousands separator is not a hallucination, so the separator is removed
+  // before the digits are compared.
+  const normalised = text.replace(/(?<=\d),(?=\d{3}\b)/g, "");
+
+  return [...new Set(normalised.match(NUMBER_PATTERN) ?? [])];
 }
 
 /**

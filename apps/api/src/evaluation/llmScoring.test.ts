@@ -235,6 +235,17 @@ describe("llmScoring", () => {
     assert.equal(aggregate.totalForbiddenHits, 1);
   });
 
+  it("treats a thousands separator as formatting, not a new number", () => {
+    const score = scoreCase({
+      testCase: baseCase({ allowedNumbers: ["12000"] }),
+      raw: analysis({ key_observations: ["Redis evicted 12,000 keys"] }),
+      evidenceIds: ["E1"],
+    });
+
+    assert.deepEqual(score.inventedNumbers, []);
+    assert.equal(score.hallucinated, false);
+  });
+
   it("does not read a citation label as a number", () => {
     const score = scoreCase({
       testCase: baseCase({ kind: "grounded_answer", requiredCitations: ["Source 1"] }),
@@ -244,6 +255,21 @@ describe("llmScoring", () => {
 
     assert.deepEqual(score.inventedNumbers, []);
     assert.equal(score.citationPrecision, 1);
+    assert.equal(score.hallucinated, false);
+  });
+
+  it("treats a bracketed citation as the source it points at", () => {
+    // `[1]` is how some models spell `Source 1`; it is a pointer either way.
+    assert.deepEqual(extractCitationLabels("See [1] and [2]."), ["Source 1", "Source 2"]);
+
+    const score = scoreCase({
+      testCase: baseCase({ kind: "grounded_answer", requiredCitations: ["Source 1"] }),
+      raw: "Terminate idle in transaction sessions [1].",
+      evidenceIds: [],
+    });
+
+    assert.equal(score.citationPrecision, 1);
+    assert.deepEqual(score.inventedNumbers, []);
     assert.equal(score.hallucinated, false);
   });
 

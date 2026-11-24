@@ -412,26 +412,73 @@ This harness deliberately calls **no** language model, so it is the correct regr
 embedding migration: if a candidate model breaks evidence collection, this job fails before any LLM is
 involved. It must keep passing after the migration, unchanged.
 
-### 6.2 Generation quality — baseline is unmeasured, and that is the honest headline
+### 6.2 Generation quality — first measured sweep (M2 harness; M3 partial)
 
-CI explicitly does not test analysis/follow-up quality (`evaluation/README.md`: "they call a language model,
-are not repeatable, and are not part of the harness"). So today:
+Before M2 this section said "unmeasured", and that was the honest answer: CI deliberately does not score
+generated text. `npm run eval:llm` now records raw responses once and scores them deterministically, reusing the
+production parsers, so the numbers below are of the code that actually runs. First real sweeps, 2026-11-24:
 
-| Dimension | Current status |
-| --- | --- |
-| Structured-output validity | Enforced at parse time; a failure is recorded as a failed analysis row. **Rate not measured.** |
-| Citation accuracy | Invented `E`-labels are dropped and counted (`droppedCitations`), persisted in activity metadata. **Rate not aggregated.** |
-| Grounding / hallucination | Unmeasured. |
-| Latency | `generation_ms` is stored per analysis row; no aggregate report. |
-| Token consumption | Not recorded at all (no `usage` read from the Gemini response). |
+- `qwen2.5:3b-instruct` on the host's Ollama through the OpenAI-compatible provider — 24/24 cases, free, local.
+- `gemini-2.5-flash-lite` — 20/24 cases; the free-tier daily quota stopped the sweep at case 20 (below).
 
-Consequence for the phase: **you cannot claim any provider is better than the current one until §4 is
-built.** The first milestone is therefore measurement, not replacement — which matches the brief's
-"measured quality, not marketing claims".
+| Metric | qwen2.5:3b-instruct (24) | gemini-2.5-flash-lite (20) |
+| --- | --- | --- |
+| parsed / schema valid | 1.000 / 1.000 | 1.000 / 1.000 |
+| fact coverage | 0.826 | 0.850 |
+| citation precision | 1.000 | 1.000 |
+| hallucination rate | 0.083 (2 cases) | 0.050 (1 case) |
+| refusal accuracy | 0.500 (2 of 4) | 0.667 (2 of 3) |
+| constraint violations | 0 | 0 |
+| dropped citations / invented numbers | 0 / 0 | 0 / 0 |
+| latency mean / p95 | 7.0 s / 10.4 s | 3.9 s / 22.4 s |
+| tokens in / out | 11 988 / 5 721 | 10 236 / 8 223 |
 
-Cheap first win: Gemini's `generateContent` response already contains `usageMetadata`
-(`promptTokenCount`, `candidatesTokenCount`). Persisting it costs one column-free change (it can go into
-the existing activity metadata) and gives real per-run token data before any eval harness exists.
+Both models produced valid JSON and structurally acceptable analyses on every case, including the 3B local one.
+What separates them is not format but judgement, and after the instrument was corrected (below) **every
+remaining failure is the model's**:
+
+- `l8-refuse-when-evidence-is-unrelated` — **both** models answered with a cause even though the linked evidence
+  was a website copy brief and an onboarding checklist. They produced load/symptom explanations instead of
+  setting `insufficient_evidence`. This is the failure mode the case exists to catch, and it is the single most
+  important number here: a confident answer built on unrelated evidence is worse than "I cannot tell".
+- `l6-follow-up-with-context` — `qwen2.5:3b` refused a question the evidence answers (image pull failure at
+  09:58, failed promotion at 10:03). `gemini-2.5-flash-lite` answered it correctly from the timestamps. A
+  small-model limitation, not a prompt defect.
+
+#### The first sweep's flags were mostly the scorer's fault
+
+The initial pass flagged six cases on qwen and five on flash-lite. Reading each one against its evidence showed
+four distinct **instrument** defects, all fixed in the harness rather than by relaxing the score:
+
+| Flag | Cause | Verdict |
+| --- | --- | --- |
+| `l4`, `l10`, `g2` | "12,000" / "450,000" vs evidence "12000" / "450000" | false positive — thousands separators |
+| `l1` | "500" repeated from the investigation description, which the prompt contains | false positive — allowed-number set too narrow |
+| `g1`, `g2`, `g4` (flash-lite) | cited as `[1]`, not `Source 1` / `E1` | false positive — citation spelling |
+| `l6` (flash-lite) | quoted the full ISO timestamp; `58:00` was read as a number | false positive — colon treated as a decimal separator |
+| `l6`, `l8` (remaining) | see above | **real model defects** |
+
+Hallucination rate fell from **0.250 to 0.083** (qwen, 24 cases) and **0.250 to 0.050** (flash-lite, 20 cases)
+once the instrument was right, with invented numbers going 8 → 0. This is the argument for keeping the harness:
+a scorer that punishes formatting is worse than no scorer, because the two real failures were buried in six.
+
+#### Provider constraints measured, not assumed
+
+- **Gemini free tier: 20 requests per model per day.** The API answered
+  `429 GenerateRequestsPerDayPerProjectPerModel-FreeTier`, `quotaValue 20`, `retryDelay 74356s`. Two consequences:
+  the 24-case dataset cannot be swept for one model in one day (`--limit` / `--resume` exist for this, and
+  `--resume --limit 24` the next day costs only the four missing calls), and a full M3 comparison needs either
+  consecutive days or a paid tier.
+- `gemini-2.5-flash` answers **404** — "no longer available to new users" — even though `models.list` still
+  returns it, and `gemini-3.8-flash` answered **503** ("currently experiencing high demand"). The model ids
+  quoted in §7/§12 are therefore stale; the catalogue now runs to `gemini-3.8-flash`, `gemini-3.5-flash`,
+  `gemini-3.5-flash-lite`, `gemini-3.1-flash-lite`. No code change is needed (the provider sends whatever
+  `GEMINI_MODEL` names, and a bad name is a readable 502), but the recommendation must not name a retired model.
+- Cost estimate from §14 was pessimistic: a 20-case sweep used **~10 K input + 8 K output tokens** against an
+  estimated 118 K, so quota — not spend — is the real constraint.
+
+Still open: the four remaining flash-lite cases, a current Gemini model, and Groq (needs a key). Run directories
+stay in `apps/api/.eval/llm-runs/` on this machine (gitignored, synthetic corpus only).
 
 ---
 
@@ -872,7 +919,7 @@ Each milestone is independently testable and independently revertible. **No mile
 | **M0** | ✅ **Done.** Seven review corrections applied (§0.1); `LLM_*` documented in `apps/api/.env.example` with fallback disabled | doc + env comments | reviewed | 0 |
 | **M1** | ✅ **Done.** `ai/llm/*`: one `generate()` for text and JSON, Gemini + OpenAI-compatible, retry/back-off/Retry-After, usage capture, opt-in fallback, sanitized logging; `rag.service` + `analysis.provider` wired; provider/model recorded from what answered | 7 source files + 1 test file | `npm run typecheck` clean; `npm test` 251/251; stub-provider end-to-end for `/ai/ask`, analysis and follow-up (§0.3) | **0** (stub) |
 | **M2** | ✅ **Done.** LLM eval harness: `src/scripts/evaluateLlm.ts` (`--record` / `--replay` / `--list`, `--case`, `--json`, `--report-only`), 24-case synthetic dataset across 12 scenarios, raw-response cache, deterministic scorers that reuse the production parsers, per-run `review.md` | `eval:llm` script; `.eval/llm-runs/` + `review.md` (gitignored) + `buildEvaluationPrompt()` so the harness sends the production prompt | Replay of hand-written fixtures twice → byte-identical output; invented evidence fails the gate (exit 1); a missing cache file refuses to score (exit 2); `npm test` 276/276 | 0 to build and verify (fixtures); ~118 K tok for the first real `--record` in M3 |
-| **M3** | Run M2 against `gemini-2.5-flash`, `-flash-lite`, and `groq/gpt-oss-120b` (one sweep per provider per day); human-review 12 responses | §6.2 filled in with measured numbers | Cached artifacts committed (no keys) | 3 × ~118 K |
+| **M3** | ⏳ **Partial.** Two sweeps recorded: `qwen2.5:3b-instruct` (local Ollama, 24/24) and `gemini-2.5-flash-lite` (free tier, 20/24 — its 20/day quota). Ten flagged responses read and classified; four instrument defects found and fixed. Remaining: 4 flash-lite cases (`--resume --limit 24`), a current Gemini model (`gemini-3.8-flash` was 503), Groq (needs a key) | §6.2 filled in with measured numbers; `review.md` per run | Every remaining flag traced to the model, not the scorer; re-scoring the same cache is byte-identical | 20 Gemini requests, 0 local |
 | **M4** | Embedding provider `gemini`: `batchEmbedContents`, `outputDimensionality 768`, task roles (document/query), unit-normalise, quota-free `probe()`; extend `EmbeddingProvider.embed()` with optional role | `embedding/gemini.provider.ts`; `/ai/health` reports it | provider unit tests (`providers.test.ts` pattern); one documented 768-d vector fixture | ~10 calls |
 | **M5** | Harness upgrade: `--provider/--model`, `--queries hard`, per-source-type recall, similarity distribution, JSON out | `eval:retrieval` flags | Re-run nomic baseline → must reproduce §5.1 exactly | 0 (local) |
 | **M6** | Embedding comparison: run M5 for nomic, Gemini, (optionally Voyage) | §5.3 filled in with measured recall/precision/MRR/nDCG/latency/throughput | `eval:investigations` PASS for the candidate | < 300 K tokens |

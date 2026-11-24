@@ -45,7 +45,14 @@ import type { LlmResponseFormat, LlmResult } from "../modules/ai/llm/provider.js
  * Usage:
  *   npm run eval:llm -- --list
  *   npm run eval:llm -- --record [--out .eval/llm-runs/<label>] [--case <id>]
+ *                          [--limit <n>] [--delay <ms>] [--resume]
  *   npm run eval:llm -- --replay .eval/llm-runs/<label> [--json] [--report-only]
+ *
+ * `--delay` paces the calls to stay inside a free-tier requests-per-minute limit,
+ * `--limit` keeps a single sweep inside a requests-per-day limit (Gemini's free
+ * tier allows 20 per model per day, and the dataset has 24 cases), and `--resume`
+ * keeps whatever a rate-limited run already recorded: a sweep that dies at case 18
+ * should continue from 19 the next day, not spend its quota on 1..17 again.
  */
 
 type RecordedCase = {
@@ -83,6 +90,9 @@ function parseArgs(argv: string[]) {
     only: null as string | null,
     json: false,
     reportOnly: false,
+    delay: 0,
+    resume: false,
+    limit: null as number | null,
   };
 
   for (let index = 0; index < argv.length; index += 1) {
@@ -110,6 +120,31 @@ function parseArgs(argv: string[]) {
       case "--report-only":
         options.reportOnly = true;
         break;
+      case "--resume":
+        options.resume = true;
+        break;
+      case "--limit": {
+        const raw = argv[(index += 1)] ?? fail("--limit needs a number of cases");
+        const parsed = Number(raw);
+
+        if (!Number.isInteger(parsed) || parsed < 1) {
+          fail("--limit needs a positive whole number of cases");
+        }
+
+        options.limit = parsed;
+        break;
+      }
+      case "--delay": {
+        const raw = argv[(index += 1)] ?? fail("--delay needs a number of milliseconds");
+        const parsed = Number(raw);
+
+        if (!Number.isFinite(parsed) || parsed < 0) {
+          fail("--delay needs a non-negative number of milliseconds");
+        }
+
+        options.delay = parsed;
+        break;
+      }
       default:
         fail(`Unknown argument "${arg}". Try --list, --record or --replay <dir>.`);
     }
@@ -249,19 +284,34 @@ async function record(prepared: Prepared, outDir: string): Promise<RecordedCase>
 }
 
 /**
- * Every number the evidence contains is fair game; anything else is invented.
- * Counting this from the evidence rather than listing numbers per case keeps the
- * dataset honest as excerpts change.
+ * Every number the model was legitimately shown is fair game; anything else it
+ * produced. That set is wider than the evidence excerpts: the prompt also prints
+ * each source's timestamp, the investigation's own description (which may name a
+ * status code) and the question. Counting all of it keeps the dataset honest as
+ * excerpts change, without flagging the model for repeating its instructions.
+ *
+ * ISO timestamps are split into components, because a prompt that says
+ * "2026-11-24T09:41:00Z" has told the model about 09:41: an answer quoting
+ * "09:41" is recalling, not inventing.
  */
-function effectiveCase(prepared: Prepared): CaseDefinition {
-  const evidenceText = prepared.testCase.evidence
-    .map((evidence) => `${evidence.title} ${evidence.excerpt}`)
-    .join(" ");
+function numbersShownToModel(prepared: Prepared): string[] {
+  const { testCase } = prepared;
+  const shown = [
+    ...testCase.evidence.map(
+      (evidence) => `${evidence.title} ${evidence.excerpt} ${evidence.createdAt ?? ""}`
+    ),
+    `${testCase.investigation.title} ${testCase.investigation.description} ${testCase.investigation.errorSignature}`,
+    testCase.question ?? "",
+  ];
 
+  return numbersInText(shown.join(" ").replace(/[-:T]/g, " "));
+}
+
+function effectiveCase(prepared: Prepared): CaseDefinition {
   return {
     ...prepared.testCase,
     allowedNumbers: [
-      ...new Set([...prepared.testCase.allowedNumbers, ...numbersInText(evidenceText)]),
+      ...new Set([...prepared.testCase.allowedNumbers, ...numbersShownToModel(prepared)]),
     ],
   };
 }
@@ -375,10 +425,11 @@ async function main(): Promise<number> {
     fail("Choose --record, --replay <dir> or --list.");
   }
 
-  const selected =
+  const matched =
     options.only === null
       ? llmEvaluationCases
       : llmEvaluationCases.filter((testCase) => testCase.id === options.only);
+  const selected = options.limit === null ? matched : matched.slice(0, options.limit);
 
   if (selected.length === 0) {
     fail(`No case matches "${options.only}". Run --list to see the ids.`);
@@ -395,6 +446,19 @@ async function main(): Promise<number> {
 
   for (const item of prepared) {
     if (options.record) {
+      if (options.resume) {
+        try {
+          const cached = JSON.parse(
+            await fs.readFile(path.join(outDir, `${item.testCase.id}.json`), "utf8")
+          ) as RecordedCase;
+          recordings.push(cached);
+          console.log(`cached    ${item.testCase.id} (${cached.model})`);
+          continue;
+        } catch {
+          // Not recorded yet: fall through and ask the provider.
+        }
+      }
+
       process.stdout.write(`recording ${item.testCase.id} ... `);
       try {
         const recorded = await record(item, outDir);
@@ -402,10 +466,16 @@ async function main(): Promise<number> {
         console.log(`${recorded.provider}/${recorded.model} ${recorded.generationMs}ms`);
       } catch (error) {
         // A provider outage is not a score. Stop rather than record a failure as
-        // if it were the model's output.
+        // if it were the model's output. With --resume, the next run continues
+        // from here instead of paying for the same calls again.
         console.log("failed");
         throw error;
       }
+
+      if (options.delay > 0) {
+        await new Promise((resolve) => setTimeout(resolve, options.delay));
+      }
+
       continue;
     }
 
