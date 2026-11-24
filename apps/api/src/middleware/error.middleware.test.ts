@@ -5,7 +5,11 @@ import type { Request, Response } from "express";
 import { errorMiddleware } from "./error.middleware.js";
 import { AuthUnauthorizedError, AuthValidationError } from "../modules/auth/auth.service.js";
 import { LogParseError } from "../modules/logs/log.parser.js";
-import { RAGProviderTimeoutError } from "../modules/ai/rag.service.js";
+import {
+  RAGProviderConfigError,
+  RAGProviderError,
+  RAGProviderTimeoutError,
+} from "../modules/ai/rag.service.js";
 import { EmbeddingModelError } from "../modules/ai/embedding.service.js";
 import {
   InvestigationConflictError,
@@ -96,6 +100,23 @@ describe("errorMiddleware", () => {
       })("connect ECONNREFUSED 10.0.0.4:5432")
     );
     assert.equal(other.body.error, "Internal server error");
+  });
+
+  it("keeps the message of a provider configuration failure", () => {
+    // A missing key or an unknown provider name is answered 502, and the
+    // sentence that names the setting is the only useful part of the response.
+    const config = handle(
+      new RAGProviderConfigError("GEMINI_API_KEY is required to generate an answer")
+    );
+
+    assert.equal(config.status, 502);
+    assert.equal(config.body.error, "GEMINI_API_KEY is required to generate an answer");
+
+    // An ordinary provider failure still hides its internals: its message can
+    // carry an upstream body or host.
+    const failure = handle(new RAGProviderError("upstream: connect ECONNREFUSED 10.0.0.4"));
+    assert.equal(failure.status, 502);
+    assert.equal(failure.body.error, "Internal server error");
   });
 
   it("honours an explicit statusCode on the error", () => {

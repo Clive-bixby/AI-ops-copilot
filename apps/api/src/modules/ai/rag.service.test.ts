@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
 import {
+  RAGProviderConfigError,
   RAGProviderError,
   RAGProviderTimeoutError,
   fromRetrievedChunk,
@@ -116,6 +117,9 @@ describe("mapAnswerProviderError", () => {
 
     assert.ok(mapped instanceof RAGProviderError);
     assert.ok(!(mapped instanceof RAGProviderTimeoutError));
+    // The subclass is what keeps the message in the response body; see the
+    // error middleware's explained-server-error allowlist.
+    assert.ok(mapped instanceof RAGProviderConfigError);
     assert.match(mapped.message, /GEMINI_API_KEY/);
   });
 

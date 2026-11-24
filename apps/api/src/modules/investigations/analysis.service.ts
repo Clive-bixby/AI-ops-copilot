@@ -1,5 +1,6 @@
 import { pool } from "../../core/db.js";
 import {
+  RAGProviderConfigError,
   RAGProviderError,
   RAGProviderTimeoutError,
 } from "../ai/rag.service.js";
@@ -171,6 +172,12 @@ export async function loadInvestigation(
 function failureReason(error: unknown): string {
   if (error instanceof RAGProviderTimeoutError) {
     return "The analysis provider timed out. Try again.";
+  }
+
+  // A retry cannot fix a missing key or an unknown provider name, so "try
+  // again" would send the engineer in a circle.
+  if (error instanceof RAGProviderConfigError) {
+    return error.message;
   }
 
   if (error instanceof RAGProviderError) {

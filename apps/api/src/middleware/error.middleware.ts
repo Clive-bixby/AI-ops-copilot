@@ -22,6 +22,7 @@ import {
   EmbeddingValidationError,
 } from "../modules/ai/embedding.service.js";
 import {
+  RAGProviderConfigError,
   RAGProviderError,
   RAGProviderTimeoutError,
   RAGValidationError,
@@ -111,6 +112,10 @@ function resolveStatus(error: HttpError): number {
  */
 const EXPLAINED_SERVER_ERRORS: ReadonlySet<ErrorClass> = new Set([
   EmbeddingModelError,
+  // A provider that is misconfigured (missing key, unknown provider name) is not
+  // a crash: "GEMINI_API_KEY is required to generate an answer" is the whole
+  // diagnosis, and it names an environment variable rather than a value.
+  RAGProviderConfigError,
 ]);
 
 export const errorMiddleware: ErrorRequestHandler = (

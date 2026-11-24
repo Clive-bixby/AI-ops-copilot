@@ -97,6 +97,18 @@ export class RAGProviderError extends Error {
   }
 }
 
+/**
+ * The provider cannot run as configured: a missing key, an unknown provider
+ * name, no model. Still a 502, but distinct from a provider that failed,
+ * because retrying cannot help and the message names the setting to fix.
+ */
+export class RAGProviderConfigError extends RAGProviderError {
+  constructor(message: string) {
+    super(message);
+    this.name = "RAGProviderConfigError";
+  }
+}
+
 export class RAGProviderTimeoutError extends Error {
   constructor(message: string) {
     super(message);
@@ -536,8 +548,10 @@ export function mapAnswerProviderError(error: unknown): Error {
   }
 
   if (error instanceof LlmConfigError) {
-    // The message names the variable; it never contains its value.
-    return new RAGProviderError(error.message);
+    // The message names the variable; it never contains its value. The subclass
+    // is what makes the error middleware keep that sentence instead of
+    // replacing a 5xx body with "Internal server error".
+    return new RAGProviderConfigError(error.message);
   }
 
   if (error instanceof LlmProviderError) {

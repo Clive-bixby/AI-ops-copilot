@@ -2,7 +2,11 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { resetLlmProvider } from "../ai/llm/index.js";
-import { RAGProviderError, RAGProviderTimeoutError } from "../ai/rag.service.js";
+import {
+  RAGProviderConfigError,
+  RAGProviderError,
+  RAGProviderTimeoutError,
+} from "../ai/rag.service.js";
 import {
   generateJsonResponse,
   getAnalysisGenerationIdentity,
@@ -78,6 +82,8 @@ test("an unknown provider name is a provider error, not a timeout", () => {
         assert.ok(error instanceof RAGProviderError);
         // 502, not 504: this is a deployment mistake, not a slow provider.
         assert.ok(!(error instanceof RAGProviderTimeoutError));
+        // The configuration subclass is what keeps the message in the body.
+        assert.ok(error instanceof RAGProviderConfigError);
         assert.match(error.message, /Unknown LLM_PROVIDER "groq"/);
         assert.match(error.message, /gemini, openai-compatible/);
         return true;
@@ -116,6 +122,7 @@ test("a missing model on the OpenAI-compatible provider is a provider error", as
       () => generateJsonResponse("Analyse this investigation."),
       (error: unknown) => {
         assert.ok(error instanceof RAGProviderError);
+        assert.ok(error instanceof RAGProviderConfigError);
         assert.match(error.message, /LLM_MODEL is required/);
         return true;
       }

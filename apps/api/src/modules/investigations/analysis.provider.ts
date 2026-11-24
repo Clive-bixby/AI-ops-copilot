@@ -4,6 +4,7 @@ import { elapsedMs, nowMs } from "../ai/aiMetrics.util.js";
 import { LlmConfigError, LlmProviderError, LlmTimeoutError } from "../ai/llm/errors.js";
 import { getLlmProvider, readLlmSettings } from "../ai/llm/index.js";
 import {
+  RAGProviderConfigError,
   RAGProviderError,
   RAGProviderTimeoutError,
 } from "../ai/rag.service.js";
@@ -40,7 +41,7 @@ export function getAnalysisGenerationIdentity(): {
     return { provider: settings.provider, model: settings.model };
   } catch (error) {
     if (error instanceof LlmConfigError) {
-      throw new RAGProviderError(error.message);
+      throw new RAGProviderConfigError(error.message);
     }
 
     throw error;
@@ -82,7 +83,7 @@ export async function generateJsonResponse(prompt: string): Promise<{
     }
 
     if (error instanceof LlmConfigError) {
-      throw new RAGProviderError(error.message);
+      throw new RAGProviderConfigError(error.message);
     }
 
     if (error instanceof LlmProviderError) {
