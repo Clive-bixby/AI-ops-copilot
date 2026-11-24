@@ -1,110 +1,76 @@
 import "../../config/env.js";
 
-import axios, { AxiosError } from "axios";
-
 import { elapsedMs, nowMs } from "../ai/aiMetrics.util.js";
+import { LlmConfigError, LlmProviderError, LlmTimeoutError } from "../ai/llm/errors.js";
+import { getLlmProvider, readLlmSettings } from "../ai/llm/index.js";
 import {
   RAGProviderError,
   RAGProviderTimeoutError,
 } from "../ai/rag.service.js";
 
 /**
- * Analysis and follow-up answers both ask Gemini for JSON directly. Prompt text
- * is never stored; only the validated result and the model metadata are persisted.
+ * Investigation analysis and follow-up answers both ask the generation provider
+ * for JSON directly. Prompt text is never stored; only the validated result and
+ * the provider/model metadata are persisted.
+ *
+ * The provider and model reported here are the ones that actually answered --
+ * when a fallback is eventually enabled, a run recorded as `gemini` must never
+ * have been written by `groq`.
  */
 
-const GEMINI_API_BASE_URL =
-  process.env.GEMINI_API_BASE_URL || "https://generativelanguage.googleapis.com";
-const DEFAULT_GEMINI_MODEL = "gemini-2.5-flash-lite";
 const DEFAULT_MAX_OUTPUT_TOKENS = 1600;
 
-export const ANALYSIS_PROVIDER = "gemini";
-
-type GeminiResponse = {
-  candidates?: {
-    content?: { parts?: { text?: string }[] };
-  }[];
-};
-
-type GeminiErrorResponse = { error?: { message?: string } };
-
+/** Configured model, used to record a run before the provider is called. */
 export function getAnalysisModel(): string {
-  return (process.env.GEMINI_MODEL || DEFAULT_GEMINI_MODEL).trim();
+  return readLlmSettings("analysis").model;
 }
 
-function getApiKey(): string {
-  const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey || apiKey.trim().length === 0) {
-    throw new RAGProviderError(
-      "GEMINI_API_KEY is required to run an investigation analysis"
-    );
-  }
-
-  return apiKey.trim();
+/** Configured provider name, likewise recorded before the call. */
+export function getAnalysisProvider(): string {
+  return readLlmSettings("analysis").provider;
 }
 
 export async function generateJsonResponse(prompt: string): Promise<{
   raw: string;
+  provider: string;
   model: string;
   generationMs: number;
 }> {
-  const model = getAnalysisModel();
-  const apiKey = getApiKey();
-  const maxOutputTokens = Number(
+  const maxOutputTokensRaw = Number(
     process.env.ANALYSIS_MAX_OUTPUT_TOKENS ?? DEFAULT_MAX_OUTPUT_TOKENS
   );
+  const maxOutputTokens = Number.isFinite(maxOutputTokensRaw)
+    ? Math.floor(maxOutputTokensRaw)
+    : DEFAULT_MAX_OUTPUT_TOKENS;
   const startedAt = nowMs();
 
   try {
-    const response = await axios.post<GeminiResponse>(
-      `${GEMINI_API_BASE_URL}/v1beta/models/${model}:generateContent`,
-      {
-        contents: [{ role: "user", parts: [{ text: prompt }] }],
-        generationConfig: {
-          temperature: 0.2,
-          topP: 0.9,
-          maxOutputTokens: Number.isFinite(maxOutputTokens)
-            ? maxOutputTokens
-            : DEFAULT_MAX_OUTPUT_TOKENS,
-          responseMimeType: "application/json",
-        },
-      },
-      {
-        timeout: 60_000,
-        headers: {
-          "Content-Type": "application/json",
-          "x-goog-api-key": apiKey,
-        },
-      }
-    );
+    const result = await getLlmProvider("analysis").generate({
+      prompt,
+      responseFormat: "json",
+      temperature: 0.2,
+      topP: 0.9,
+      maxOutputTokens,
+    });
 
-    const text = (response.data.candidates?.[0]?.content?.parts ?? [])
-      .map((part) => part.text)
-      .filter((part): part is string => typeof part === "string")
-      .join("\n")
-      .trim();
-
-    if (text.length === 0) {
-      throw new RAGProviderError("The analysis provider returned no content");
-    }
-
-    return { raw: text, model, generationMs: elapsedMs(startedAt) };
+    return {
+      raw: result.text,
+      provider: result.provider,
+      model: result.model,
+      generationMs: elapsedMs(startedAt),
+    };
   } catch (error) {
-    if (error instanceof RAGProviderError) {
-      throw error;
+    if (error instanceof LlmTimeoutError) {
+      throw new RAGProviderTimeoutError("The analysis provider timed out");
     }
 
-    if (error instanceof AxiosError) {
-      if (error.code === "ECONNABORTED" || error.code === "ETIMEDOUT") {
-        throw new RAGProviderTimeoutError("The analysis provider timed out");
-      }
+    if (error instanceof LlmConfigError) {
+      throw new RAGProviderError(error.message);
+    }
 
-      const data = error.response?.data as GeminiErrorResponse | undefined;
-      const message = data?.error?.message || error.message;
-      const status = error.response?.status ?? "unknown";
-
+    if (error instanceof LlmProviderError) {
       throw new RAGProviderError(
-        `Analysis provider request failed (${status}): ${message}`
+        `Analysis provider request failed (${error.status ?? "unknown"}): ${error.message}`
       );
     }
 

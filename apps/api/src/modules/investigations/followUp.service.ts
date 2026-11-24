@@ -1,7 +1,7 @@
 import { pool } from "../../core/db.js";
 import { RAGProviderError } from "../ai/rag.service.js";
 import { insertActivity, listActivity } from "./activity.service.js";
-import { ANALYSIS_PROVIDER, generateJsonResponse } from "./analysis.provider.js";
+import { generateJsonResponse } from "./analysis.provider.js";
 import {
   getInvestigationAnalysis,
   loadInvestigation,
@@ -198,7 +198,7 @@ async function answerQuestion(input: {
         citations,
         analysisId,
         model: generated.model,
-        provider: ANALYSIS_PROVIDER,
+        provider: generated.provider,
         generationMs: generated.generationMs,
         droppedCitations: parsed.droppedCitations,
       },
@@ -216,7 +216,7 @@ async function answerQuestion(input: {
     citations,
     analysisId,
     model: generated.model,
-    provider: ANALYSIS_PROVIDER,
+    provider: generated.provider,
     generationMs: generated.generationMs,
     createdAt: activity.createdAt,
   };

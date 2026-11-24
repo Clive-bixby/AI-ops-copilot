@@ -1,4 +1,5 @@
-import axios, { AxiosError } from "axios";
+import { LlmProviderError, LlmTimeoutError } from "./llm/errors.js";
+import { getLlmProvider } from "./llm/index.js";
 
 import { estimateTokens } from "./chunk.service.js";
 import {
@@ -16,15 +17,12 @@ const DEFAULT_MAX_OUTPUT_TOKENS = 700;
 const MIN_QUESTION_LENGTH = 5;
 const MAX_QUESTION_LENGTH = 500;
 const NO_RELIABLE_CONTEXT_ANSWER = "No reliable operational context found.";
-const DEFAULT_GEMINI_MODEL = "gemini-2.5-flash-lite";
 const KEYWORD_FALLBACK_LIMIT = 5;
 // Keyword-only chunks carry no similarity score, so they cannot be ranked against
 // vector evidence and are only ever a rescue path. When they are the only
 // evidence available, keep the prompt small enough that model context is not
 // spent on a long tail of one-word coincidences.
 const MAX_KEYWORD_ONLY_PROMPT_CHUNKS = 2;
-const GEMINI_API_BASE_URL =
-  process.env.GEMINI_API_BASE_URL || "https://generativelanguage.googleapis.com";
 
 export type QueryType =
   | "incident_analysis"
@@ -79,25 +77,6 @@ type ContextChunk = RAGSource & {
 type PromptContextChunk = ContextChunk & {
   sourceNumber: number;
   promptContent: string;
-};
-
-type GeminiGenerateContentResponse = {
-  candidates?: {
-    content?: {
-      parts?: {
-        text?: string;
-      }[];
-    };
-    finishReason?: string;
-  }[];
-};
-
-type GeminiErrorResponse = {
-  error?: {
-    code?: number;
-    message?: string;
-    status?: string;
-  };
 };
 
 export class RAGValidationError extends Error {
@@ -167,19 +146,6 @@ function getRAGMinSimilarity(): number {
     DEFAULT_MIN_SIMILARITY;
 
   return Math.max(configured, DEFAULT_MIN_SIMILARITY);
-}
-
-function getGeminiModel(): string {
-  return (process.env.GEMINI_MODEL || DEFAULT_GEMINI_MODEL).trim();
-}
-
-function getGeminiApiKey(): string {
-  const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey || apiKey.trim().length === 0) {
-    throw new RAGProviderError("GEMINI_API_KEY is required for RAG answers");
-  }
-
-  return apiKey.trim();
 }
 
 function sanitizeQuestion(question: string): string {
@@ -551,77 +517,42 @@ function buildNoContextResponse(input: {
   };
 }
 
-function extractGeminiText(response: GeminiGenerateContentResponse): string {
-  const parts = response.candidates?.[0]?.content?.parts ?? [];
-  const text = parts
-    .map((part) => part.text)
-    .filter((part): part is string => typeof part === "string")
-    .join("\n")
-    .trim();
-
-  if (!text) {
-    throw new RAGProviderError("Gemini returned an empty answer");
-  }
-
-  return text;
-}
-
 async function generateAnswer(prompt: string): Promise<{
   answer: string;
   model: string;
   generationMs: number;
 }> {
-  const model = getGeminiModel();
-  const apiKey = getGeminiApiKey();
   const maxOutputTokens = Math.floor(
     getNumberEnv("RAG_MAX_OUTPUT_TOKENS", DEFAULT_MAX_OUTPUT_TOKENS)
   );
   const startedAt = nowMs();
 
   try {
-    const response = await axios.post<GeminiGenerateContentResponse>(
-      `${GEMINI_API_BASE_URL}/v1beta/models/${model}:generateContent`,
-      {
-        contents: [
-          {
-            role: "user",
-            parts: [{ text: prompt }],
-          },
-        ],
-        generationConfig: {
-          temperature: 0.1,
-          topP: 0.8,
-          maxOutputTokens,
-        },
-      },
-      {
-        timeout: 60_000,
-        headers: {
-          "Content-Type": "application/json",
-          "x-goog-api-key": apiKey,
-        },
-      }
-    );
+    const result = await getLlmProvider("rag").generate({
+      prompt,
+      // A grounded answer is prose, so the provider is not asked to constrain
+      // its output. Structured JSON is the investigation call sites' job.
+      responseFormat: "text",
+      temperature: 0.1,
+      topP: 0.8,
+      maxOutputTokens,
+    });
 
     return {
-      answer: extractGeminiText(response.data),
-      model,
+      answer: result.text,
+      model: result.model,
       generationMs: elapsedMs(startedAt),
     };
   } catch (error) {
-    if (error instanceof RAGProviderError) throw error;
+    // The endpoint's existing contract is a 504 for a slow provider and a 502
+    // for a failing one; the provider-agnostic errors are mapped back onto it.
+    if (error instanceof LlmTimeoutError) {
+      throw new RAGProviderTimeoutError("The answer provider timed out");
+    }
 
-    if (error instanceof AxiosError) {
-      if (error.code === "ECONNABORTED" || error.code === "ETIMEDOUT") {
-        throw new RAGProviderTimeoutError("Gemini request timed out");
-      }
-
-      const data = error.response?.data as GeminiErrorResponse | undefined;
-      const message = data?.error?.message || error.message;
-      const status = error.response?.status ?? "unknown";
-
+    if (error instanceof LlmProviderError) {
       throw new RAGProviderError(
-        `Gemini request failed (${status}): ${message}`
+        `The answer provider request failed: ${error.message}`
       );
     }
 

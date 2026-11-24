@@ -5,9 +5,9 @@ import {
 } from "../ai/rag.service.js";
 import { insertActivity } from "./activity.service.js";
 import {
-  ANALYSIS_PROVIDER,
   generateJsonResponse,
   getAnalysisModel,
+  getAnalysisProvider,
 } from "./analysis.provider.js";
 import {
   ANALYSIS_LIMITS,
@@ -278,6 +278,7 @@ async function persistSuccess(input: {
   userId: string;
   evidenceIds: string[];
   parsed: ParsedAnalysis;
+  provider: string;
   model: string;
   generationMs: number;
   droppedCitations: number;
@@ -297,6 +298,8 @@ async function persistSuccess(input: {
            missing_information = $7::text[],
            evidence_ids = $8::uuid[],
            generation_ms = $9,
+           provider = $10,
+           model = $11,
            updated_at = NOW()
        WHERE id = $1 AND organization_id = $2`,
       [
@@ -309,6 +312,8 @@ async function persistSuccess(input: {
         input.parsed.missingInformation,
         input.evidenceIds,
         input.generationMs,
+        input.provider,
+        input.model,
       ]
     );
 
@@ -389,7 +394,7 @@ async function persistSuccess(input: {
       metadata: {
         analysisId: input.analysisId,
         model: input.model,
-        provider: ANALYSIS_PROVIDER,
+        provider: input.provider,
         analysisVersion: ANALYSIS_VERSION,
         evidenceCount: input.evidenceIds.length,
         hypothesisCount: input.parsed.hypotheses.length,
@@ -444,6 +449,9 @@ export async function analyzeInvestigation(input: {
   );
 
   const model = getAnalysisModel();
+  // Recorded before the call so an abandoned run still names what it attempted;
+  // updated with the answering provider once the result is persisted.
+  const provider = getAnalysisProvider();
   const prompt = buildAnalysisPrompt({
     investigation: {
       id: investigation.id,
@@ -481,7 +489,7 @@ export async function analyzeInvestigation(input: {
         investigationId,
         input.organizationId,
         ANALYSIS_VERSION,
-        ANALYSIS_PROVIDER,
+        provider,
         model,
         prompt.evidenceIds,
         JSON.stringify({
@@ -518,7 +526,12 @@ export async function analyzeInvestigation(input: {
     startClient.release();
   }
 
-  let generated: { raw: string; model: string; generationMs: number };
+  let generated: {
+    raw: string;
+    provider: string;
+    model: string;
+    generationMs: number;
+  };
 
   try {
     generated = await generateJsonResponse(prompt.prompt);
@@ -562,6 +575,7 @@ export async function analyzeInvestigation(input: {
       userId: input.userId,
       evidenceIds: prompt.evidenceIds,
       parsed: parsed.analysis,
+      provider: generated.provider,
       model: generated.model,
       generationMs: generated.generationMs,
       droppedCitations: parsed.droppedCitations,
