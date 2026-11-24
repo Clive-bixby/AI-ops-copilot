@@ -12,8 +12,8 @@ import {
   Icon,
   PageHeader,
   Panel,
-  confidenceTone,
 } from '../components/ui';
+import { confidenceTone } from '../lib/uiTokens';
 import { AiText } from '../components/AiText';
 
 interface ChatMessage {

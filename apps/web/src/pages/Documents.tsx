@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import clsx from 'clsx';
 import { api, errorMessage } from '../lib/api';
-import { useApiData, useInterval } from '../lib/hooks';
+import { useApiData, useFilteredPage, useInterval } from '../lib/hooks';
 import {
   fileIcon,
   fileType,
@@ -66,13 +66,26 @@ export function Documents() {
   const [query, setQuery] = useState('');
   const [status, setStatus] = useState('all');
   const [type, setType] = useState('all');
-  const [page, setPage] = useState(1);
+  const [page, setPage] = useFilteredPage(`${query}|${status}|${type}`);
   const pageSize = 10;
 
-  const [selectedId, setSelectedId] = useState<string | null>(searchParams.get('doc'));
-  const [detail, setDetail] = useState<DocumentDetail | null>(null);
-  const [detailLoading, setDetailLoading] = useState(false);
-  const [detailError, setDetailError] = useState<string | null>(null);
+  const [chosenId, setSelectedId] = useState<string | null>(null);
+
+  // Selection is derived rather than synchronised in an effect: a row click
+  // wins, then a `?doc=` deep link, then the first document in the list.
+  const selectedId = chosenId ?? searchParams.get('doc') ?? documents[0]?.id ?? null;
+
+  // Fetched through the shared hook rather than a hand-written effect, which
+  // had to set `loading` inside the effect body -- the cascading render the
+  // lint rule rejects. `data` stays in the dependency list so the inspector keeps
+  // following the poll while a document is processing.
+  const detailState = useApiData<DocumentDetail | null>(
+    () => (selectedId ? api.documents.get(selectedId) : Promise.resolve(null)),
+    [selectedId, data]
+  );
+  const detail = detailState.data;
+  const detailLoading = detailState.loading;
+  const detailError = detailState.error;
 
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
@@ -99,10 +112,6 @@ export function Documents() {
     });
   }, [documents, query, status, type]);
 
-  useEffect(() => {
-    setPage(1);
-  }, [query, status, type]);
-
   const pageItems = filtered.slice((page - 1) * pageSize, page * pageSize);
   const hasProcessing = documents.some((document) =>
     ['processing', 'pending'].includes(document.processingStatus)
@@ -118,45 +127,6 @@ export function Documents() {
     () => void reload(true),
     hasProcessing || uploading || pollAfterUpload ? 3000 : null
   );
-
-  useEffect(() => {
-    if (documents.length > 0 && !selectedId) setSelectedId(documents[0]?.id ?? null);
-  }, [documents, selectedId]);
-
-  useEffect(() => {
-    const target = searchParams.get('doc');
-    if (target) setSelectedId(target);
-  }, [searchParams]);
-
-  useEffect(() => {
-    if (!selectedId) {
-      setDetail(null);
-      return;
-    }
-
-    let cancelled = false;
-    setDetailLoading(true);
-    setDetailError(null);
-
-    api.documents
-      .get(selectedId)
-      .then((result) => {
-        if (!cancelled) setDetail(result);
-      })
-      .catch((caught: unknown) => {
-        if (!cancelled) {
-          setDetail(null);
-          setDetailError(errorMessage(caught));
-        }
-      })
-      .finally(() => {
-        if (!cancelled) setDetailLoading(false);
-      });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [selectedId, data]);
 
   const resetFilters = () => {
     setQuery('');

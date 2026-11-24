@@ -16,9 +16,9 @@ import {
   PageHeader,
   Panel,
   Tabs,
-  buttonClass,
 } from '../components/ui';
 import type { BadgeTone } from '../components/ui';
+import { buttonClass } from '../lib/uiTokens';
 
 function roleTone(role: string): BadgeTone {
   if (role === 'owner') return 'ai';

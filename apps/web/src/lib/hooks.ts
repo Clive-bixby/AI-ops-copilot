@@ -65,9 +65,35 @@ export function useDebouncedValue<T>(value: T, delay = 250): T {
   return debounced;
 }
 
+/**
+ * Page number for a filtered list, reset to the first page when the filters
+ * change.
+ *
+ * This used to be `useState(1)` plus an effect that called `setPage(1)` on
+ * every filter change: the list rendered the old page number once and then
+ * corrected itself. Storing the filter key next to the page turns the reset
+ * into a calculation, so the first render after a filter change is already
+ * page one.
+ */
+export function useFilteredPage(filterKey: string): [number, (page: number) => void] {
+  const [state, setState] = useState({ key: filterKey, page: 1 });
+
+  const setPage = useCallback(
+    (page: number) => setState({ key: filterKey, page }),
+    [filterKey]
+  );
+
+  return [state.key === filterKey ? state.page : 1, setPage];
+}
+
 export function useInterval(callback: () => void, delay: number | null): void {
   const saved = useRef(callback);
-  saved.current = callback;
+
+  // Recorded in an effect, not while rendering: a ref written during render is
+  // one of the things concurrent rendering makes unsafe.
+  useEffect(() => {
+    saved.current = callback;
+  });
 
   useEffect(() => {
     if (delay === null) return;

@@ -1,51 +1,19 @@
-import React, { createContext, useCallback, useContext, useEffect, useState } from 'react';
+import { createContext, useContext } from 'react';
 
-type Theme = 'light' | 'dark';
+export type Theme = 'light' | 'dark';
 
-interface ThemeContextValue {
+export interface ThemeContextValue {
   theme: Theme;
   setTheme: (theme: Theme) => void;
   toggleTheme: () => void;
 }
 
-const ThemeContext = createContext<ThemeContextValue | null>(null);
-const STORAGE_KEY = 'opspilot-theme';
-
-function initialTheme(): Theme {
-  try {
-    const stored = localStorage.getItem(STORAGE_KEY);
-    if (stored === 'light' || stored === 'dark') return stored;
-  } catch {
-    /* storage unavailable */
-  }
-  return 'light';
-}
-
-export function ThemeProvider({ children }: { children: React.ReactNode }) {
-  const [theme, setThemeState] = useState<Theme>(initialTheme);
-
-  useEffect(() => {
-    const root = document.documentElement;
-    root.classList.toggle('dark', theme === 'dark');
-    try {
-      localStorage.setItem(STORAGE_KEY, theme);
-    } catch {
-      /* storage unavailable */
-    }
-  }, [theme]);
-
-  const setTheme = useCallback((next: Theme) => setThemeState(next), []);
-  const toggleTheme = useCallback(
-    () => setThemeState((current) => (current === 'dark' ? 'light' : 'dark')),
-    []
-  );
-
-  return (
-    <ThemeContext.Provider value={{ theme, setTheme, toggleTheme }}>
-      {children}
-    </ThemeContext.Provider>
-  );
-}
+/**
+ * The theme context and its hook; `ThemeProvider` lives in
+ * `themeProvider.tsx` so this module exports no components (see `./auth.tsx`
+ * for why that matters to fast refresh).
+ */
+export const ThemeContext = createContext<ThemeContextValue | null>(null);
 
 export function useTheme(): ThemeContextValue {
   const context = useContext(ThemeContext);

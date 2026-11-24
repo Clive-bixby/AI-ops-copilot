@@ -323,8 +323,8 @@ function OperationsOverviewTab({
   );
 }
 
-function ActionItemRow({ item }: { item: OperationsActionItem }) {
-  const overdue = item.dueAt !== null && new Date(item.dueAt).getTime() < Date.now();
+function ActionItemRow({ item, now }: { item: OperationsActionItem; now: number }) {
+  const overdue = item.dueAt !== null && new Date(item.dueAt).getTime() < now;
 
   return (
     <Link
@@ -375,16 +375,20 @@ export function Operations() {
   const [due, setDue] = useState('all');
   const [page, setPage] = useState(1);
 
-  const queueState = useApiData<OperationsActionItemList>(
-    () =>
-      api.insights.actionItems({
+  const queueState = useApiData<OperationsActionItemList & { loadedAt: number }>(
+    async () => ({
+      ...(await api.insights.actionItems({
         status: status === 'all' ? undefined : (status as never),
         priority: priority === 'all' ? undefined : (priority as never),
         assignee: assignee === 'all' ? undefined : assignee,
         due: due === 'all' ? undefined : (due as 'overdue' | 'due_soon'),
         limit: PAGE_SIZE,
         offset: (page - 1) * PAGE_SIZE,
-      }),
+      })),
+      // Captured with the response so "overdue" is measured against the data's
+      // own clock instead of reading Date.now() while rendering.
+      loadedAt: Date.now(),
+    }),
     [tab, status, priority, assignee, due, page]
   );
 
@@ -397,6 +401,7 @@ export function Operations() {
   };
 
   const items = queueState.data?.items ?? [];
+  const itemsLoadedAt = queueState.data?.loadedAt ?? 0;
   const total = queueState.data?.total ?? 0;
 
   return (
@@ -602,7 +607,7 @@ export function Operations() {
                   </div>
                 ) : null}
                 {items.map((item) => (
-                  <ActionItemRow key={item.id} item={item} />
+                  <ActionItemRow key={item.id} item={item} now={itemsLoadedAt} />
                 ))}
                 <Pagination
                   page={page}

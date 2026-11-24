@@ -12,8 +12,9 @@ import { Operations } from './pages/Operations';
 import { Search } from './pages/Search';
 import { Admin } from './pages/Admin';
 import { Login } from './pages/Login';
-import { AuthProvider, useAuth } from './lib/auth';
-import { ThemeProvider } from './lib/theme';
+import { useAuth } from './lib/auth';
+import { AuthProvider } from './lib/authProvider';
+import { ThemeProvider } from './lib/themeProvider';
 import { Icon } from './components/ui';
 
 function BootScreen() {

@@ -1,8 +1,8 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useMemo, useRef, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import clsx from 'clsx';
 import { api, errorMessage } from '../lib/api';
-import { useApiData, useDebouncedValue } from '../lib/hooks';
+import { useApiData, useDebouncedValue, useFilteredPage } from '../lib/hooks';
 import {
   csvCell,
   downloadText,
@@ -27,9 +27,8 @@ import {
   PageHeader,
   Pagination,
   Panel,
-  buttonClass,
-  levelTone,
 } from '../components/ui';
+import { buttonClass, levelTone } from '../lib/uiTokens';
 
 const LEVELS = ['all', 'debug', 'info', 'warn', 'error', 'fatal'] as const;
 const RANGES = [
@@ -57,11 +56,24 @@ export function Logs() {
 
   const [query, setQuery] = useState('');
   const [level, setLevel] = useState<(typeof LEVELS)[number]>('all');
-  const [range, setRange] = useState<RangeId>('all');
-  const [page, setPage] = useState(1);
-  const [selectedId, setSelectedId] = useState<string | null>(searchParams.get('log'));
+  const [range, setRangeState] = useState<RangeId>('all');
+  const [chosenId, setSelectedId] = useState<string | null>(null);
   const debouncedQuery = useDebouncedValue(query, 180);
+  const [page, setPage] = useFilteredPage(`${level}|${debouncedQuery}|${range}`);
   const pageSize = 15;
+
+  // Selection is derived rather than synchronised in an effect: a row click
+  // wins, then a `?log=` deep link, then the first log in the list.
+  const selectedId = chosenId ?? searchParams.get('log') ?? logs[0]?.id ?? null;
+
+  // The window is anchored when a range is picked, so a re-render does not
+  // silently slide it forward -- and so the clock is never read during render.
+  const [rangeStart, setRangeStart] = useState<number | null>(null);
+  const setRange = useCallback((next: RangeId) => {
+    setRangeState(next);
+    const ms = RANGES.find((item) => item.id === next)?.ms ?? null;
+    setRangeStart(ms === null ? null : Date.now() - ms);
+  }, []);
 
   const [ingestOpen, setIngestOpen] = useState(false);
   const [ingestText, setIngestText] = useState('');
@@ -70,27 +82,15 @@ export function Logs() {
   const [ingestSuccess, setIngestSuccess] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  useEffect(() => {
-    if (logs.length > 0 && !selectedId) setSelectedId(logs[0]?.id ?? null);
-  }, [logs, selectedId]);
-
-  useEffect(() => {
-    const target = searchParams.get('log');
-    if (target) setSelectedId(target);
-  }, [searchParams]);
-
-  const cutoff = RANGES.find((item) => item.id === range)?.ms ?? null;
-
   const filtered = useMemo(() => {
     const needle = debouncedQuery.trim().toLowerCase();
-    const cutoffTime = cutoff ? Date.now() - cutoff : null;
 
     return logs.filter((log) => {
       if (level !== 'all' && (log.level || '').toLowerCase() !== level) return false;
 
-      if (cutoffTime) {
+      if (rangeStart !== null) {
         const time = new Date(log.timestamp).getTime();
-        if (!Number.isFinite(time) || time < cutoffTime) return false;
+        if (!Number.isFinite(time) || time < rangeStart) return false;
       }
 
       if (!needle) return true;
@@ -106,11 +106,7 @@ export function Logs() {
 
       return haystack.includes(needle);
     });
-  }, [logs, level, debouncedQuery, cutoff]);
-
-  useEffect(() => {
-    setPage(1);
-  }, [level, debouncedQuery, cutoff]);
+  }, [logs, level, debouncedQuery, rangeStart]);
 
   const pageItems = filtered.slice((page - 1) * pageSize, page * pageSize);
   const selected = logs.find((log) => log.id === selectedId) ?? null;
@@ -378,8 +374,8 @@ export function Logs() {
                   })}
                 </div>
                 <div className="mt-1 flex justify-between font-mono text-[10px] text-outline">
-                  <span>{formatTime(new Date(buckets[0]?.start ?? Date.now()).toISOString())}</span>
-                  <span>{formatTime(new Date(buckets[buckets.length - 1]?.start ?? Date.now()).toISOString())}</span>
+                  <span>{formatTime(new Date(buckets[0]!.start).toISOString())}</span>
+                  <span>{formatTime(new Date(buckets[buckets.length - 1]!.start).toISOString())}</span>
                 </div>
               </>
             )}

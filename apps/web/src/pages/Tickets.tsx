@@ -1,8 +1,8 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import clsx from 'clsx';
 import { api, errorMessage } from '../lib/api';
-import { useApiData, useDebouncedValue } from '../lib/hooks';
+import { useApiData, useDebouncedValue, useFilteredPage } from '../lib/hooks';
 import { formatDateTime, relativeTime, shortId, titleCase } from '../lib/format';
 import type { AskResponse, Ticket } from '../lib/types';
 import {
@@ -18,10 +18,8 @@ import {
   PageHeader,
   Pagination,
   Panel,
-  buttonClass,
-  priorityTone,
-  statusTone,
 } from '../components/ui';
+import { buttonClass, priorityTone, statusTone } from '../lib/uiTokens';
 import { AiText } from '../components/AiText';
 
 const STATUSES = ['open', 'pending', 'in_progress', 'resolved', 'closed'] as const;
@@ -110,10 +108,14 @@ export function Tickets() {
   const [priority, setPriority] = useState('all');
   const [status, setStatus] = useState('all');
   const [sort, setSort] = useState<'newest' | 'priority'>('newest');
-  const [page, setPage] = useState(1);
-  const [selectedId, setSelectedId] = useState<string | null>(searchParams.get('ticket'));
+  const [chosenId, setSelectedId] = useState<string | null>(null);
   const debouncedQuery = useDebouncedValue(query, 180);
+  const [page, setPage] = useFilteredPage(`${priority}|${status}|${debouncedQuery}|${sort}`);
   const pageSize = 10;
+
+  // Selection is derived rather than synchronised in an effect: a row click
+  // wins, then a `?ticket=` deep link, then the first ticket in the list.
+  const selectedId = chosenId ?? searchParams.get('ticket') ?? tickets[0]?.id ?? null;
 
   const [triage, setTriage] = useState<TriageState>({ phase: 'idle' });
   const [triageTicketId, setTriageTicketId] = useState<string | null>(null);
@@ -123,15 +125,6 @@ export function Tickets() {
   const [ingesting, setIngesting] = useState(false);
   const [ingestError, setIngestError] = useState<string | null>(null);
   const [ingestSuccess, setIngestSuccess] = useState<string | null>(null);
-
-  useEffect(() => {
-    if (tickets.length > 0 && !selectedId) setSelectedId(tickets[0]?.id ?? null);
-  }, [tickets, selectedId]);
-
-  useEffect(() => {
-    const target = searchParams.get('ticket');
-    if (target) setSelectedId(target);
-  }, [searchParams]);
 
   const counts = useMemo(() => {
     const openTickets = tickets.filter(isOpen);
@@ -167,10 +160,6 @@ export function Tickets() {
     }
     return result;
   }, [tickets, priority, status, debouncedQuery, sort]);
-
-  useEffect(() => {
-    setPage(1);
-  }, [priority, status, debouncedQuery, sort]);
 
   const pageItems = filtered.slice((page - 1) * pageSize, page * pageSize);
   const selected = tickets.find((ticket) => ticket.id === selectedId) ?? null;

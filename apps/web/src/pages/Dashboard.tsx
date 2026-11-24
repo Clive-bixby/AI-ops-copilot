@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { api, errorMessage } from '../lib/api';
 import { useAuth } from '../lib/auth';
@@ -26,11 +26,8 @@ import {
   Progress,
   Skeleton,
   Stat,
-  buttonClass,
-  levelTone,
-  priorityTone,
-  statusTone,
 } from '../components/ui';
+import { buttonClass, levelTone, priorityTone, statusTone } from '../lib/uiTokens';
 import { AiText } from '../components/AiText';
 import { OperationsStrip } from '../components/OperationsStrip';
 
@@ -40,6 +37,8 @@ interface DashboardData {
   tickets: Ticket[];
   health: ApiHealth | null;
   status: SystemStatus | null;
+  /** When the fetch resolved, used for the "updated" label in the header. */
+  loadedAt: Date;
 }
 
 const PRIORITY_RANK: Record<string, number> = {
@@ -63,7 +62,6 @@ export function Dashboard() {
   const navigate = useNavigate();
   const { session } = useAuth();
   const [autoRefresh, setAutoRefresh] = useState(true);
-  const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
 
   const { data, loading, error, reload } = useApiData<DashboardData>(async () => {
     const [overview, logs, tickets, health, status] = await Promise.all([
@@ -73,7 +71,7 @@ export function Dashboard() {
       api.ai.health().catch(() => null),
       api.status().catch(() => null),
     ]);
-    return { overview, logs, tickets, health, status };
+    return { overview, logs, tickets, health, status, loadedAt: new Date() };
   }, []);
 
   useInterval(
@@ -82,10 +80,6 @@ export function Dashboard() {
     },
     autoRefresh ? 30_000 : null
   );
-
-  useEffect(() => {
-    if (data) setLastUpdated(new Date());
-  }, [data]);
 
   const [triage, setTriage] = useState<TriageState>({ phase: 'idle' });
   const [triageTicketId, setTriageTicketId] = useState<string | null>(null);
@@ -102,6 +96,9 @@ export function Dashboard() {
   const latestLogs = data?.logs.slice(0, 6) ?? [];
   const latestTickets = tickets.slice(0, 4);
   const overview = data?.overview;
+  // Timestamped with the response instead of in an effect on `data`: same value,
+  // one render fewer.
+  const lastUpdated = data?.loadedAt ?? null;
 
   const runTriage = async (ticket: Ticket) => {
     setTriageTicketId(ticket.id);

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import type { ReactNode } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { api, errorMessage } from '../lib/api';
@@ -162,7 +162,10 @@ export function InvestigationDetailPage() {
 
   const [tab, setTab] = useState<TabID>('overview');
   const [collection, setCollection] = useState<EvidenceCollectionSummary | null>(null);
-  const [actionDraft, setActionDraft] = useState<ActionItemSuggestion | null>(null);
+  const [draftState, setDraftState] = useState<{
+    investigationId: string;
+    draft: ActionItemSuggestion | null;
+  }>({ investigationId: id, draft: null });
 
   const detailState = useApiData(() => api.investigations.get(id), [id]);
   const timelineState = useApiData(() => api.investigations.timeline(id), [id]);
@@ -177,9 +180,11 @@ export function InvestigationDetailPage() {
   const detail = detailState.data;
   const investigation: Investigation | null = detail?.investigation ?? null;
 
-  useEffect(() => {
-    setActionDraft(null);
-  }, [id]);
+  // The draft belongs to one investigation. Keeping its id beside it means
+  // opening another investigation starts empty without an effect to reset it.
+  const actionDraft = draftState.investigationId === id ? draftState.draft : null;
+  const setActionDraft = (draft: ActionItemSuggestion | null) =>
+    setDraftState({ investigationId: id, draft });
 
   const refreshAll = async () => {
     await Promise.all([
