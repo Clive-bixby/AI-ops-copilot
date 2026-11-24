@@ -47,7 +47,9 @@ row is updated again on success in case a fallback answered.
 
 ### 0.3 Verification actually run
 
-`npm run typecheck` → clean. `npm test` → **251/251 pass** (234 before + 17 new).
+`npm run typecheck` → clean. `npm test` → **260/260 pass** (234 before + 26 new). Configuration
+failures are mapped to the endpoint's 502 on all three generation paths, including an unknown
+`LLM_PROVIDER`, which is read before the generation call and therefore needed its own mapping.
 
 End-to-end against a stub provider (real PostgreSQL, real `nomic-embed-text` ingestion, **zero** provider
 quota; `GEMINI_API_KEY` is unset in this environment, so a live Google call was not possible):

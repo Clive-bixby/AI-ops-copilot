@@ -6,8 +6,7 @@ import {
 import { insertActivity } from "./activity.service.js";
 import {
   generateJsonResponse,
-  getAnalysisModel,
-  getAnalysisProvider,
+  getAnalysisGenerationIdentity,
 } from "./analysis.provider.js";
 import {
   ANALYSIS_LIMITS,
@@ -448,10 +447,11 @@ export async function analyzeInvestigation(input: {
     [investigationId, input.organizationId, STALE_PENDING_MINUTES]
   );
 
-  const model = getAnalysisModel();
   // Recorded before the call so an abandoned run still names what it attempted;
-  // updated with the answering provider once the result is persisted.
-  const provider = getAnalysisProvider();
+  // updated with the answering provider once the result is persisted. Reading the
+  // configuration is itself fallible -- an unknown provider name is reported as a
+  // 502 here rather than escaping as an unhandled 500.
+  const { provider, model } = getAnalysisGenerationIdentity();
   const prompt = buildAnalysisPrompt({
     investigation: {
       id: investigation.id,

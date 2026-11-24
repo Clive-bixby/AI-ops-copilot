@@ -20,14 +20,31 @@ import {
 
 const DEFAULT_MAX_OUTPUT_TOKENS = 1600;
 
-/** Configured model, used to record a run before the provider is called. */
-export function getAnalysisModel(): string {
-  return readLlmSettings("analysis").model;
-}
+/**
+ * Configured identity, recorded on the run before the provider is called.
+ *
+ * Reading the settings can itself fail -- an unknown `LLM_PROVIDER`, or an unknown
+ * `LLM_FALLBACK_PROVIDER` when fallback is enabled. That happens before the
+ * generation call, so it would escape the mapper in `generateJsonResponse` and
+ * surface as an unhandled 500. A bad provider name is the same class of failure
+ * as a rejected key: the provider cannot answer, so the endpoint answers 502
+ * with the sentence that fixes it.
+ */
+export function getAnalysisGenerationIdentity(): {
+  provider: string;
+  model: string;
+} {
+  try {
+    const settings = readLlmSettings("analysis");
 
-/** Configured provider name, likewise recorded before the call. */
-export function getAnalysisProvider(): string {
-  return readLlmSettings("analysis").provider;
+    return { provider: settings.provider, model: settings.model };
+  } catch (error) {
+    if (error instanceof LlmConfigError) {
+      throw new RAGProviderError(error.message);
+    }
+
+    throw error;
+  }
 }
 
 export async function generateJsonResponse(prompt: string): Promise<{
