@@ -142,8 +142,9 @@ can serve a seeded corpus but cannot ingest one.
 
 Re-running is safe: existing documents, tickets, logs and investigations are
 skipped and action-item statuses are repaired. `--force` re-ingests tickets and
-logs. The script ends with a verification summary: row counts, the operations
-overview and a search that should return hits.
+logs. The script ends with a verification summary — row counts, the operations
+overview and a search that should return hits — and exits non-zero when one of
+those checks fails, so it can gate CI as well as fill a demo.
 
 ## Deploying
 

@@ -13,6 +13,9 @@
  * embedding provider that can embed text it has never seen: Ollama (the default)
  * or any `openai-compatible` service. `fixture` mode replays recorded vectors
  * only, so it can serve this corpus once seeded but cannot ingest it.
+ *
+ * The exit code is meaningful: the run ends with a verification summary and exits
+ * non-zero when a check fails, so CI can use it as a gate on the demo path.
  */
 
 const API = (process.env.API_URL || "http://localhost:3000").replace(/\/$/, "");
@@ -673,6 +676,12 @@ async function seedInvestigations() {
   await tryPost(`/investigations/${webhook}/notes`, {
     body: "Backlog drained 43 minutes after the promotion. Delivery was retried from the ledger, so nothing needed replaying by hand.",
   }, "notes");
+  // `open -> resolved` is not a legal transition. Evidence collection promotes a
+  // new investigation to `investigating` when it adds something, and this used to
+  // depend on that having happened; say it explicitly. Re-applying the current
+  // status is accepted, so this is also correct on a re-run, where the
+  // investigation may already be resolved or promoted.
+  await call("PATCH", `/investigations/${webhook}`, { status: "investigating" });
   await call("PATCH", `/investigations/${webhook}`, {
     status: "resolved",
     resolutionSummary:
@@ -685,6 +694,7 @@ async function seedInvestigations() {
 // ------------------------------------------------------------------ checks ---
 async function verify() {
   const checks = [];
+  const failures = [];
   const docs = await call("GET", "/documents");
   const docList = Array.isArray(docs) ? docs : docs.documents || [];
   const statusCounts = docList.reduce(
@@ -692,25 +702,31 @@ async function verify() {
     {}
   );
   checks.push(`documents: ${docList.length} ${JSON.stringify(statusCounts)}`);
+  if (docList.length === 0) failures.push("no documents were indexed");
 
   const ticketsOut = await call("GET", "/tickets");
   const ticketList = Array.isArray(ticketsOut) ? ticketsOut : ticketsOut.tickets || [];
   checks.push(`tickets: ${ticketList.length}`);
+  if (ticketList.length === 0) failures.push("no tickets were ingested");
 
   const logsOut = await call("GET", "/logs");
   const logList = Array.isArray(logsOut) ? logsOut : logsOut.logs || [];
   checks.push(`logs: ${logList.length}`);
+  if (logList.length === 0) failures.push("no logs were ingested");
 
   const investigationsOut = await call("GET", "/investigations");
   const invList =
     investigationsOut.investigations || investigationsOut.items || investigationsOut;
-  checks.push(`investigations: ${Array.isArray(invList) ? invList.length : "?"}`);
+  const investigationCount = Array.isArray(invList) ? invList.length : 0;
+  checks.push(`investigations: ${investigationCount}`);
+  if (investigationCount < 3) failures.push(`expected 3 investigations, found ${investigationCount}`);
 
   try {
     const ops = await call("GET", "/insights/operations");
     checks.push(`operations overview: ${JSON.stringify(ops).slice(0, 180)}`);
   } catch (error) {
     checks.push(`operations overview failed: ${error.message}`);
+    failures.push(`operations overview failed: ${error.message}`);
   }
 
   try {
@@ -718,18 +734,24 @@ async function verify() {
       query: "how do I roll back a bad deployment",
       limit: 3,
     });
-    const results = search.results || search;
+    const results = Array.isArray(search.results) ? search.results : [];
     checks.push(
-      `search: ${Array.isArray(results) ? results.length : "?"} hits (${(Array.isArray(results) ? results : [])
-        .map((r) => r.matchType)
-        .join(", ")})`
+      `search: ${results.length} hits (${results.map((r) => r.matchType).join(", ")})`
     );
+    if (results.length === 0) {
+      failures.push("search returned no hits for a runbook question");
+    }
   } catch (error) {
     checks.push(`search failed: ${error.message}`);
+    failures.push(`search failed: ${error.message}`);
   }
 
   console.log("\nverification:");
   for (const line of checks) console.log(`  - ${line}`);
+
+  if (failures.length > 0) {
+    throw new Error(`verification failed:\n  - ${failures.join("\n  - ")}`);
+  }
 }
 
 // -------------------------------------------------------------------- main ---
