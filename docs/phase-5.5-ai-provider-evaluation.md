@@ -47,9 +47,12 @@ row is updated again on success in case a fallback answered.
 
 ### 0.3 Verification actually run
 
-`npm run typecheck` → clean. `npm test` → **260/260 pass** (234 before + 26 new). Configuration
+`npm run typecheck` → clean. `npm test` → **276/276 pass** (234 before + 42 new). Configuration
 failures are mapped to the endpoint's 502 on all three generation paths, including an unknown
-`LLM_PROVIDER`, which is read before the generation call and therefore needed its own mapping.
+`LLM_PROVIDER`, which is read before the generation call and therefore needed its own mapping. A
+configuration 502 keeps its message instead of the generic `Internal server error`: `RAGProviderConfigError`
+subclasses `RAGProviderError` (so the status mapping is unchanged) and sits on the error middleware's
+explained-server-error allowlist, whose messages name environment variables and never values.
 
 End-to-end against a stub provider (real PostgreSQL, real `nomic-embed-text` ingestion, **zero** provider
 quota; `GEMINI_API_KEY` is unset in this environment, so a live Google call was not possible):
@@ -67,20 +70,35 @@ VERIFIED
 That the RAG request carried **no** `responseMimeType` while both structured calls did is the specific
 regression this phase had to avoid.
 
-### 0.4 Still open before M2
+Re-verified over HTTP against the **rebuilt container** with no LLM key set, so the real configuration path
+answered rather than a stub:
+
+```
+POST /ai/ask                          502  GEMINI_API_KEY is required to generate an answer
+POST /investigations/:id/analyze      502  GEMINI_API_KEY is required to generate an answer
+POST /investigations/:id/questions    502  GEMINI_API_KEY is required to generate an answer
+GET  /investigations/:id/analysis     200  status=failed
+                                           failure=GEMINI_API_KEY is required to generate an answer
+```
+
+### 0.4 Still open before M3
 
 - **Record the real Gemini free-tier limits** (RPM/RPD/TPM) from AI Studio → Rate limits. Google no longer
 publishes them statically, so §7/§12 numbers stay marked *(unverified)* until someone with the project open
 reads them. This is a one-minute manual step and it blocks the capacity claims, not the code.
 - `ANALYSIS_LLM_MODEL=gemini-2.5-flash` is deliberately **not** set yet: changing the analysis model is a
 quality decision that M3 measures.
-- Nothing is deployed; the running container image predates M1 (see §0.5).
+- Nothing is deployed to a shared environment; the local `api` container was rebuilt from this worktree
+  (see §0.5).
+- M2's harness exists and is verified by replay; its first real `--record` sweep is M3 and needs a key.
 
 ### 0.5 Environment note
 
-The `api` container bakes its source at build time (only `uploads`/`pgdata` are volumes), so it still runs
-pre-M1 code. The verification above ran against the worktree on the host, pointed at the published database.
-Restarting or rebuilding that container is a deployment action and was not taken here.
+The `api` container bakes its source at build time (only `uploads`/`pgdata` are volumes), so any source change
+needs a rebuild before the container reflects it. It has been rebuilt and restarted from this worktree, which is
+what the configuration-502 check above ran against. The stub-provider run used the host worktree pointed at the
+published database. `web`, `worker` and the database were not redeployed — the worker still needs the same
+rebuild before it runs the new generation code.
 
 ---
 
@@ -853,7 +871,7 @@ Each milestone is independently testable and independently revertible. **No mile
 | --- | --- | --- | --- | --- |
 | **M0** | ✅ **Done.** Seven review corrections applied (§0.1); `LLM_*` documented in `apps/api/.env.example` with fallback disabled | doc + env comments | reviewed | 0 |
 | **M1** | ✅ **Done.** `ai/llm/*`: one `generate()` for text and JSON, Gemini + OpenAI-compatible, retry/back-off/Retry-After, usage capture, opt-in fallback, sanitized logging; `rag.service` + `analysis.provider` wired; provider/model recorded from what answered | 7 source files + 1 test file | `npm run typecheck` clean; `npm test` 251/251; stub-provider end-to-end for `/ai/ask`, analysis and follow-up (§0.3) | **0** (stub) |
-| **M2** | LLM eval harness: `src/scripts/evaluateLlm.ts`, 24-case dataset (synthetic), raw-response cache, deterministic scorers, human-review output | `eval:llm` script + `eval/llm-runs/` artifacts + markdown score table | Re-score from cache twice → identical numbers (determinism); parser invariants unchanged | 24 Gemini calls (~118 K tok) |
+| **M2** | ✅ **Done.** LLM eval harness: `src/scripts/evaluateLlm.ts` (`--record` / `--replay` / `--list`, `--case`, `--json`, `--report-only`), 24-case synthetic dataset across 12 scenarios, raw-response cache, deterministic scorers that reuse the production parsers, per-run `review.md` | `eval:llm` script; `.eval/llm-runs/` + `review.md` (gitignored) + `buildEvaluationPrompt()` so the harness sends the production prompt | Replay of hand-written fixtures twice → byte-identical output; invented evidence fails the gate (exit 1); a missing cache file refuses to score (exit 2); `npm test` 276/276 | 0 to build and verify (fixtures); ~118 K tok for the first real `--record` in M3 |
 | **M3** | Run M2 against `gemini-2.5-flash`, `-flash-lite`, and `groq/gpt-oss-120b` (one sweep per provider per day); human-review 12 responses | §6.2 filled in with measured numbers | Cached artifacts committed (no keys) | 3 × ~118 K |
 | **M4** | Embedding provider `gemini`: `batchEmbedContents`, `outputDimensionality 768`, task roles (document/query), unit-normalise, quota-free `probe()`; extend `EmbeddingProvider.embed()` with optional role | `embedding/gemini.provider.ts`; `/ai/health` reports it | provider unit tests (`providers.test.ts` pattern); one documented 768-d vector fixture | ~10 calls |
 | **M5** | Harness upgrade: `--provider/--model`, `--queries hard`, per-source-type recall, similarity distribution, JSON out | `eval:retrieval` flags | Re-run nomic baseline → must reproduce §5.1 exactly | 0 (local) |

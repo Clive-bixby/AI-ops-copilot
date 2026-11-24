@@ -78,7 +78,7 @@ type ContextChunk = RAGSource & {
   content: string;
 };
 
-type PromptContextChunk = ContextChunk & {
+export type PromptContextChunk = ContextChunk & {
   sourceNumber: number;
   promptContent: string;
 };
@@ -487,6 +487,23 @@ function buildGroundedPrompt(input: {
     "- Reference source numbers inline when making evidence-backed claims.",
     "- Do not cite sources that were not provided.",
   ].join("\n");
+}
+
+/**
+ * The grounded prompt, built from context the caller already has.
+ *
+ * The evaluation harness needs the exact prompt the API sends, but it has no
+ * database and no embedding provider, so it supplies its own chunks instead of
+ * running retrieval. Nothing else about the prompt differs, which is the point:
+ * a prompt change that helps in the harness helps in production, and a prompt
+ * that drifts shows up as a changed score.
+ */
+export function buildEvaluationPrompt(input: {
+  question: string;
+  queryType: QueryType;
+  context: PromptContextChunk[];
+}): string {
+  return buildGroundedPrompt(input);
 }
 
 function estimateConfidence(chunks: ContextChunk[]): ConfidenceLevel {
