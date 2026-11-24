@@ -199,9 +199,13 @@ export class OpenAiCompatibleProvider implements LlmProvider {
     const status = error.response?.status ?? null;
     const detail = trimmedDetail(error.response?.data);
 
+    // The provider's own sentence distinguishes a per-minute throttle from an
+    // exhausted daily quota, so it is part of the message.
+    const explained = detail === null ? "" : ` ${detail}`;
+
     if (status === 429) {
       return new RetryableFailure(
-        "The generation provider is rate limiting this deployment (429).",
+        `The generation provider is rate limiting this deployment (429).${explained}`,
         429,
         parseRetryAfter(error.response?.headers?.["retry-after"])
       );
@@ -209,7 +213,7 @@ export class OpenAiCompatibleProvider implements LlmProvider {
 
     if (status !== null && status >= 500) {
       return new RetryableFailure(
-        `The generation provider failed (${status}).`,
+        `The generation provider failed (${status}).${explained}`,
         status,
         parseRetryAfter(error.response?.headers?.["retry-after"])
       );
