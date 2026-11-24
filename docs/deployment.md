@@ -252,7 +252,8 @@ an `x-organization-id` header (the middleware does not fall back to the token).
 
 The repository ships `scripts/seed-demo.mjs`, which does the whole job against a
 running deployment — account, six runbooks, tickets, logs and three
-investigations — and finishes with a verification summary:
+investigations — and finishes with a verification summary. It exits non-zero when
+a check in that summary fails, so CI treats an empty demo as a failure:
 
 ```bash
 API_URL=https://your-api node scripts/seed-demo.mjs
@@ -569,7 +570,10 @@ advisory that needs a major version is a decision, not an automatic bump.
 `docker-compose.e2e.yml` overlay that adds a deterministic embedding stub, then
 runs `apps/api/e2e/smoke.mjs`. The script signs up, signs in, uploads a document,
 waits for the worker to index it, searches for it, and checks that anonymous
-requests get 401 and a foreign tenant gets 403.
+requests get 401 and a foreign tenant gets 403. The job then runs
+`scripts/seed-demo.mjs` against the same stack, because the demo path — tickets,
+logs, investigations and action items — is what a visitor actually sees, and the
+seed exits non-zero if its verification summary comes back empty.
 
 The embedding stub returns the same unit vector for every input, so similarity is
 always 1.0. That is intentional: the check proves the pipeline (parse, chunk,
