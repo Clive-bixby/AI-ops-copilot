@@ -541,6 +541,16 @@ has, and it needs a model that follows the gate or a retrieval signal that never
 flagged), which is what re-scoring a cache must show: the fix changes what the model is asked, so it can only be
 proven by asking again — blocked by the 20/day quota.
 
+**Live confirmation, 2026-11-25.** The re-run that was rate-limited above has now been done. On investigation
+`da058b95-d709-4867-865f-d852c8cf41ad` (one linked item, the synthetic `website-copy-brief.md`, so every evidence
+row is `weak`) the analysis persisted `insufficient_evidence: true` with **zero hypotheses for that analysis**
+(`investigation_hypotheses` grouped by `analysis_id`: the seven older rows belong to three pre-guard analyses and
+are unchanged). Flash-lite's daily quota was still spent, so the call went through the same
+`analyzeInvestigation` path with `ANALYSIS_LLM_MODEL=gemini-3.1-flash-lite`; the row names that model
+(`cfd63f52-91a6-40c5-b53b-239ba7b69e35`). This run shows a current model *following* the gate, which is the
+better outcome but not the guard firing — the guard itself is proven by the replay numbers above and by the
+unit tests, not by this call.
+
 #### Provider constraints measured, not assumed
 
 - **Gemini free tier: 20 requests per model per day.** The API answered
@@ -556,8 +566,46 @@ proven by asking again — blocked by the 20/day quota.
 - Cost estimate from §14 was pessimistic: a 20-case sweep used **~10 K input + 8 K output tokens** against an
   estimated 118 K, so quota — not spend — is the real constraint.
 
-Still open: the four remaining flash-lite cases, a current Gemini model, and Groq (needs a key). Run directories
-stay in `apps/api/.eval/llm-runs/` on this machine (gitignored, synthetic corpus only).
+#### 6.2.3 A current Gemini model — measured, and not better than flash-lite on judgement
+
+`gemini-2.5-flash` 404s for new projects and `gemini-3.8-flash` answered 503, so the current-model sweep used
+**`gemini-3.5-flash-lite`** (`--limit 20 --delay 15000`, 2026-11-25, `.eval/llm-runs/gemini-35-flash-lite`). It is
+the same first-20 slice as the flash-lite cache, so the two columns are comparable:
+
+| Metric | qwen2.5:3b gate4 (24) | gemini-2.5-flash-lite (20) | gemini-3.5-flash-lite (20) |
+| --- | --- | --- | --- |
+| parsed / schema valid | 1.000 / 1.000 | 1.000 / 1.000 | 1.000 / 1.000 |
+| fact coverage | 0.722 | 0.850 | **0.900** |
+| citation precision | 1.000 | 1.000 | 1.000 |
+| hallucination rate | 0.000 | 0.000 (after the guard) | 0.150 (3 cases) |
+| refusal accuracy | 1.000 | 1.000 (after the guard) | 0.600 (3 of 5 decisions) |
+| constraint violations | 0 | 0 | 0 |
+| dropped citations / invented numbers | 0 / 0 | 0 / 0 | 0 / 0 |
+| latency mean / p95 | 7.0 s / 10.4 s | 3.9 s / 22.4 s | 3.3 s / 14.3 s |
+| tokens in / out | 11 988 / 5 721 | 10 236 / 8 223 | 12 257 / 5 598 |
+
+Every flag was read against its evidence. Two are real and one is the case's own rule doing its job:
+
+- `l8-refuse-when-evidence-is-unrelated` — the model set `insufficient_evidence: true` and returned an empty
+  `hypotheses` list *by itself*, which is exactly what the gate asks for and what flash-lite failed twice before
+  it. It is still counted as a hallucination because `next_steps` and `missing_information` name "database
+  connection pool metrics" and the case forbids that phrase (L8 asserts zero named services). That is a request
+  for evidence rather than a stated cause, but it is a subsystem name the linked item never mentions, so the flag
+  stands and is recorded instead of being argued away.
+- `l6-follow-up-with-context` and `f2-follow-up-redis` — genuine over-refusals. `l6` claims the material never
+  says when the rollback started, although the two timestamps are in the evidence; `f2` refuses to name an
+  eviction policy while quoting the one that matters (`volatile-lru`) in the same answer. Refusal accuracy is
+  therefore 3 of 5 decisions: `l8`, `l9` and `f3` correct, `l6` and `f2` wrong.
+
+So a newer model buys **completeness** (0.900 facts, the best measured) and pays for it in **judgement**: it is
+the first model to over-refuse grounded follow-ups, and the only hallucination flag left on the flash-lite cache
+is the same `l8` case, now answered correctly but still naming the forbidden phrase. `gemini-3.5-flash-lite` is a
+reasonable analysis default on these numbers; it is not a strict upgrade, and the flash-lite baseline it replaces
+was measured on a different prompt.
+
+Still open: the four remaining `gemini-2.5-flash-lite` cases (its daily quota was still spent on 2026-11-25 — the
+first uncached call answered 429, so the 24/24 re-record on that model has to wait for a reset), and Groq (needs a
+key). Run directories stay in `apps/api/.eval/llm-runs/` on this machine (gitignored, synthetic corpus only).
 
 ---
 
@@ -998,8 +1046,8 @@ Each milestone is independently testable and independently revertible. **No mile
 | **M0** | ✅ **Done.** Seven review corrections applied (§0.1); `LLM_*` documented in `apps/api/.env.example` with fallback disabled | doc + env comments | reviewed | 0 |
 | **M1** | ✅ **Done.** `ai/llm/*`: one `generate()` for text and JSON, Gemini + OpenAI-compatible, retry/back-off/Retry-After, usage capture, opt-in fallback, sanitized logging; `rag.service` + `analysis.provider` wired; provider/model recorded from what answered | 7 source files + 1 test file | `npm run typecheck` clean; `npm test` 251/251; stub-provider end-to-end for `/ai/ask`, analysis and follow-up (§0.3) | **0** (stub) |
 | **M2** | ✅ **Done.** LLM eval harness: `src/scripts/evaluateLlm.ts` (`--record` / `--replay` / `--list`, `--case`, `--json`, `--report-only`), 24-case synthetic dataset across 12 scenarios, raw-response cache, deterministic scorers that reuse the production parsers, per-run `review.md` | `eval:llm` script; `.eval/llm-runs/` + `review.md` (gitignored) + `buildEvaluationPrompt()` so the harness sends the production prompt | Replay of hand-written fixtures twice → byte-identical output; invented evidence fails the gate (exit 1); a missing cache file refuses to score (exit 2); `npm test` 276/276 | 0 to build and verify (fixtures); ~118 K tok for the first real `--record` in M3 |
-| **M3** | ⏳ **Partial.** Two sweeps recorded: `qwen2.5:3b-instruct` (local Ollama, 24/24) and `gemini-2.5-flash-lite` (free tier, 20/24 — its 20/day quota). Ten flagged responses read and classified; four instrument defects found and fixed; the `l8` unrelated-evidence failure fixed in both prompts (24 local cases: hallucination 0.000, every insufficiency decision correct, fact coverage 0.722 — §6.2.1). Remaining: 4 flash-lite cases (`--resume --limit 24`), a current Gemini model (`gemini-3.8-flash` was 503), Groq (needs a key) | §6.2 filled in with measured numbers; `review.md` per run | Every remaining flag traced to the model, not the scorer; re-scoring the same cache is byte-identical | 20 Gemini requests, 0 local |
-| **M4** | Embedding provider `gemini`: `batchEmbedContents`, `outputDimensionality 768`, task roles (document/query), unit-normalise, quota-free `probe()`; extend `EmbeddingProvider.embed()` with optional role | `embedding/gemini.provider.ts`; `/ai/health` reports it | provider unit tests (`providers.test.ts` pattern); one documented 768-d vector fixture | ~10 calls |
+| **M3** | ⏳ **Partial.** Two sweeps recorded: `qwen2.5:3b-instruct` (local Ollama, 24/24) and `gemini-2.5-flash-lite` (free tier, 20/24 — its 20/day quota). Ten flagged responses read and classified; four instrument defects found and fixed; the `l8` unrelated-evidence failure fixed in both prompts (24 local cases: hallucination 0.000, every insufficiency decision correct, fact coverage 0.722 — §6.2.1). A current model is now measured (`gemini-3.5-flash-lite`, 20 cases, §6.2.3) and the live guard check is confirmed (§6.2.2). **Remaining:** the four `gemini-2.5-flash-lite` cases (its quota was still spent on 2026-11-25) and Groq (needs a key) | §6.2 filled in with measured numbers; `review.md` per run | Every remaining flag traced to the model, not the scorer; re-scoring the same cache is byte-identical | 20 Gemini requests (`gemini-3.5-flash-lite`) + 4 local |
+| **M4** | ✅ **Done.** Embedding provider `gemini`: `batchEmbedContents`, `outputDimensionality 768`, task roles (document/query), unit-normalise, quota-free `probe()`; `EmbeddingProvider.embed()` took an optional role and the query paths (`retrieval.service`, `/ai/test-search`) now pass `"query"` | `embedding/gemini.provider.ts`; `/ai/health` reports `gemini` | 8 mocked-HTTP unit tests in `providers.test.ts` (no network); `npm run typecheck` clean; `npm test` 291/291; live `probe()` and one 768-d document embedding (norm 1.000) | 2 calls |
 | **M5** | Harness upgrade: `--provider/--model`, `--queries hard`, per-source-type recall, similarity distribution, JSON out | `eval:retrieval` flags | Re-run nomic baseline → must reproduce §5.1 exactly | 0 (local) |
 | **M6** | Embedding comparison: run M5 for nomic, Gemini, (optionally Voyage) | §5.3 filled in with measured recall/precision/MRR/nDCG/latency/throughput | `eval:investigations` PASS for the candidate | < 300 K tokens |
 | **M7** | Decision record: final LLM + embedding choice with numbers; explicit accept/reject for each risk | `docs/phase-5.5-decision.md` | reviewed with you | 0 |
