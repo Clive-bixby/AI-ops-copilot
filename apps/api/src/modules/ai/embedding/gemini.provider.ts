@@ -1,0 +1,283 @@
+import axios, { AxiosError } from "axios";
+
+import {
+  EmbeddingConfigError,
+  EmbeddingConnectionError,
+  EmbeddingModelError,
+} from "./errors.js";
+import type {
+  EmbeddingBatch,
+  EmbeddingProbe,
+  EmbeddingProvider,
+  EmbeddingRole,
+} from "./provider.js";
+import type { EmbeddingSettings } from "./settings.js";
+
+type GeminiBatchResponse = {
+  embeddings?: { values?: number[] }[];
+};
+
+type GeminiModelsResponse = {
+  models?: { name?: string }[];
+};
+
+/**
+ * Task instructions are the reason this provider is worth adding: nomic has no
+ * equivalent, and a document corpus embedded with `RETRIEVAL_DOCUMENT` while
+ * queries use `RETRIEVAL_QUERY` matches better than one embedded blindly.
+ */
+const TASK_TYPES: Record<EmbeddingRole, string> = {
+  document: "RETRIEVAL_DOCUMENT",
+  query: "RETRIEVAL_QUERY",
+};
+
+/**
+ * The documented maximum texts per `batchEmbedContents` call. Our ingestion
+ * batches 16, so this is a guard against a future batch-size change, not a
+ * routine split.
+ */
+const MAX_REQUESTS_PER_CALL = 100;
+
+/**
+ * Google documents that a `outputDimensionality` below 3 072 must be
+ * L2-normalised by the caller. Cosine distance is magnitude-invariant, so this
+ * does not change ranking today; it keeps stored vectors comparable with an
+ * inner-product index if one is ever added, and it costs one pass.
+ */
+function unitLength(vector: number[]): number[] {
+  const norm = Math.sqrt(vector.reduce((sum, value) => sum + value * value, 0));
+
+  if (!Number.isFinite(norm) || norm === 0) {
+    throw new EmbeddingModelError(
+      "The embedding service returned a zero-length vector."
+    );
+  }
+
+  return vector.map((value) => value / norm);
+}
+
+/**
+ * Gemini embeddings (`POST /v1beta/models/{model}:batchEmbedContents`).
+ *
+ * `gemini-embedding-001` can emit 768 dimensions through `outputDimensionality`,
+ * which is the width `source_chunks.embedding` already uses -- so switching to
+ * it needs no schema change and no index rebuild.
+ */
+export class GeminiEmbeddingProvider implements EmbeddingProvider {
+  readonly name = "gemini" as const;
+  readonly model: string;
+  readonly dimensions: number;
+  readonly endpoint: string;
+
+  constructor(private readonly settings: EmbeddingSettings) {
+    this.model = settings.model;
+    this.dimensions = settings.dimensions;
+    this.endpoint =
+      settings.baseUrl ?? "(EMBEDDING_BASE_URL is not set)";
+  }
+
+  private requireBaseUrl(): string {
+    if (!this.settings.baseUrl) {
+      throw new EmbeddingConfigError(
+        "EMBEDDING_BASE_URL is required when EMBEDDING_PROVIDER=gemini " +
+          "(it defaults to https://generativelanguage.googleapis.com)."
+      );
+    }
+
+    return this.settings.baseUrl;
+  }
+
+  private requireApiKey(): string {
+    if (!this.settings.apiKey) {
+      throw new EmbeddingConfigError(
+        "GEMINI_API_KEY (or EMBEDDING_API_KEY) is required when EMBEDDING_PROVIDER=gemini."
+      );
+    }
+
+    return this.settings.apiKey;
+  }
+
+  async embed(
+    texts: string[],
+    role: EmbeddingRole = "document"
+  ): Promise<EmbeddingBatch> {
+    const baseUrl = this.requireBaseUrl();
+    const apiKey = this.requireApiKey();
+
+    if (texts.length > MAX_REQUESTS_PER_CALL) {
+      throw new EmbeddingModelError(
+        `Gemini accepts at most ${MAX_REQUESTS_PER_CALL} texts per embedding request; ` +
+          `received ${texts.length}.`
+      );
+    }
+
+    try {
+      const response = await axios.post<GeminiBatchResponse>(
+        `${baseUrl}/v1beta/models/${this.model}:batchEmbedContents`,
+        {
+          requests: texts.map((text) => ({
+            model: `models/${this.model}`,
+            content: { parts: [{ text }] },
+            taskType: TASK_TYPES[role],
+            outputDimensionality: this.dimensions,
+          })),
+        },
+        {
+          timeout: 120_000,
+          headers: {
+            "Content-Type": "application/json",
+            "x-goog-api-key": apiKey,
+          },
+        }
+      );
+
+      const rows = response.data.embeddings;
+
+      if (!Array.isArray(rows) || rows.length === 0) {
+        throw new EmbeddingModelError(
+          "The embedding service returned no vectors for this request."
+        );
+      }
+
+      if (rows.length !== texts.length) {
+        throw new EmbeddingModelError(
+          `The embedding service returned ${rows.length} vectors for ${texts.length} inputs.`
+        );
+      }
+
+      // `batchEmbedContents` answers in request order; assert the shape rather
+      // than trusting it, because a mis-paired vector poisons the index silently.
+      const embeddings = rows.map((row, index) => {
+        if (!Array.isArray(row.values) || row.values.length === 0) {
+          throw new EmbeddingModelError(
+            `The embedding service returned an empty vector at index ${index}.`
+          );
+        }
+
+        return unitLength(row.values);
+      });
+
+      return { embeddings, model: this.model };
+    } catch (error) {
+      if (
+        error instanceof EmbeddingModelError ||
+        error instanceof EmbeddingConfigError
+      ) {
+        throw error;
+      }
+
+      if (error instanceof AxiosError) {
+        if (error.code === "ECONNREFUSED" || error.code === "ENOTFOUND") {
+          throw new EmbeddingConnectionError(
+            `Cannot connect to the embedding service at ${baseUrl}.`
+          );
+        }
+
+        if (error.code === "ECONNABORTED" || error.code === "ETIMEDOUT") {
+          throw new EmbeddingConnectionError(
+            `The embedding service at ${baseUrl} did not answer in time.`
+          );
+        }
+
+        const status = error.response?.status;
+
+        if (status === 401 || status === 403) {
+          throw new EmbeddingModelError(
+            `The embedding service rejected the credentials (${status}). Check GEMINI_API_KEY.`
+          );
+        }
+
+        if (status === 429) {
+          throw new EmbeddingConnectionError(
+            "The embedding service is rate limiting this deployment (429). Retry later or lower INGESTION_CONCURRENCY."
+          );
+        }
+
+        if (status === 404) {
+          throw new EmbeddingModelError(
+            `Model '${this.model}' is not available for embedding at ${baseUrl}.`
+          );
+        }
+
+        const detail =
+          (error.response?.data as { error?: { message?: string } } | undefined)
+            ?.error?.message ?? error.message;
+
+        throw new EmbeddingConnectionError(
+          `Embedding request failed (${status ?? "no response"}): ${detail}`
+        );
+      }
+
+      throw error;
+    }
+  }
+
+  /**
+   * Lists models rather than embedding a probe string: `/ai/health` is polled on
+   * every page load, and listing is not billed as an embedding request.
+   */
+  async probe(): Promise<EmbeddingProbe> {
+    let baseUrl: string;
+    let apiKey: string;
+
+    try {
+      baseUrl = this.requireBaseUrl();
+      apiKey = this.requireApiKey();
+    } catch (error) {
+      return {
+        ok: false,
+        message:
+          error instanceof Error
+            ? error.message
+            : "Embedding service is not configured",
+      };
+    }
+
+    try {
+      const response = await axios.get<GeminiModelsResponse>(
+        `${baseUrl}/v1beta/models`,
+        {
+          timeout: 5_000,
+          params: { pageSize: 1_000 },
+          headers: { "x-goog-api-key": apiKey },
+        }
+      );
+
+      const ids = (response.data.models ?? [])
+        .map((entry) => entry.name?.replace(/^models\//, ""))
+        .filter((id): id is string => typeof id === "string" && id.length > 0);
+
+      if (ids.length === 0) {
+        return {
+          ok: true,
+          message:
+            "The embedding service answered; it did not list its models",
+        };
+      }
+
+      if (!ids.includes(this.model)) {
+        return {
+          ok: false,
+          message: `The embedding service does not list model '${this.model}'. Available: ${ids
+            .filter((id) => id.includes("embedding"))
+            .slice(0, 8)
+            .join(", ")}`,
+        };
+      }
+
+      return {
+        ok: true,
+        message: "The embedding service answered and lists the model",
+      };
+    } catch (error) {
+      const reason =
+        error instanceof AxiosError
+          ? error.code === "ECONNREFUSED"
+            ? `Cannot connect to ${baseUrl}`
+            : `Embedding service error: ${error.message}`
+          : "Unknown error";
+
+      return { ok: false, message: reason };
+    }
+  }
+}

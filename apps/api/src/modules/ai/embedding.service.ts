@@ -1,4 +1,5 @@
 import { getEmbeddingProvider } from "./embedding/index.js";
+import type { EmbeddingRole } from "./embedding/index.js";
 import {
   EmbeddingConfigError,
   EmbeddingModelError,
@@ -30,7 +31,7 @@ export type EmbeddingResult = {
 
 export type EmbeddingHealth = {
   healthy: boolean;
-  /** "ollama" | "openai-compatible" | "fixture" */
+  /** "ollama" | "openai-compatible" | "gemini" | "fixture" */
   provider: string;
   model: string;
   /** null when the configuration is too broken to know the width. */
@@ -86,9 +87,17 @@ function toResults(
   });
 }
 
-/** Generate an embedding vector for one piece of text. */
-export async function generateEmbedding(text: string): Promise<EmbeddingResult> {
-  const [result] = await generateEmbeddings([text]);
+/**
+ * Generate an embedding vector for one piece of text.
+ *
+ * `role` decides the provider's task instruction (search query vs stored
+ * document). It defaults to "document" so ingestion call sites stay unchanged.
+ */
+export async function generateEmbedding(
+  text: string,
+  role: EmbeddingRole = "document"
+): Promise<EmbeddingResult> {
+  const [result] = await generateEmbeddings([text], role);
 
   if (!result) {
     throw new EmbeddingModelError("The embedding service returned no vector.");
@@ -99,11 +108,12 @@ export async function generateEmbedding(text: string): Promise<EmbeddingResult> 
 
 /** Generate embeddings for several texts in one provider request. */
 export async function generateEmbeddings(
-  texts: string[]
+  texts: string[],
+  role: EmbeddingRole = "document"
 ): Promise<EmbeddingResult[]> {
   const trimmed = normaliseTexts(texts);
   const provider = getEmbeddingProvider();
-  const batch = await provider.embed(trimmed);
+  const batch = await provider.embed(trimmed, role);
 
   return toResults(
     batch.embeddings,

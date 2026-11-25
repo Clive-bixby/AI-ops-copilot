@@ -17,7 +17,7 @@ import { EmbeddingConfigError } from "./errors.js";
  * preventing the process from starting.
  */
 
-export type ProviderName = "ollama" | "openai-compatible" | "fixture";
+export type ProviderName = "ollama" | "openai-compatible" | "gemini" | "fixture";
 
 /**
  * The stored vector width, fixed by `document_chunks.embedding VECTOR(768)` in
@@ -30,8 +30,13 @@ const PROVIDER_ALIASES: Record<string, ProviderName> = {
   ollama: "ollama",
   openai: "openai-compatible",
   "openai-compatible": "openai-compatible",
+  gemini: "gemini",
   fixture: "fixture",
 };
+
+/** Gemini serves embeddings from the same host as generation, under /v1beta. */
+const GEMINI_BASE_URL = "https://generativelanguage.googleapis.com";
+const GEMINI_EMBEDDING_MODEL = "gemini-embedding-001";
 
 export type EmbeddingSettings = {
   provider: ProviderName;
@@ -96,10 +101,15 @@ function parseProvider(): ProviderName {
 export function readEmbeddingSettings(): EmbeddingSettings {
   const provider = parseProvider();
   const configuredFixturePath = trimmed(process.env.EMBEDDING_FIXTURE_PATH);
-  const model =
+  const configuredModel =
     trimmed(process.env.EMBEDDING_MODEL) ??
-    trimmed(process.env.OLLAMA_EMBEDDING_MODEL) ??
-    "nomic-embed-text";
+    trimmed(process.env.OLLAMA_EMBEDDING_MODEL);
+  // A provider's own default, not another provider's: inheriting
+  // "nomic-embed-text" would send a model name Gemini does not have.
+  const model =
+    configuredModel ??
+    (provider === "gemini" ? GEMINI_EMBEDDING_MODEL : "nomic-embed-text");
+  const explicitKey = trimmed(process.env.EMBEDDING_API_KEY);
 
   return {
     provider,
@@ -109,8 +119,13 @@ export function readEmbeddingSettings(): EmbeddingSettings {
       /\/+$/,
       ""
     ),
-    baseUrl: trimmed(process.env.EMBEDDING_BASE_URL)?.replace(/\/+$/, "") ?? null,
-    apiKey: trimmed(process.env.EMBEDDING_API_KEY),
+    baseUrl:
+      trimmed(process.env.EMBEDDING_BASE_URL)?.replace(/\/+$/, "") ??
+      (provider === "gemini" ? GEMINI_BASE_URL : null),
+    // One key for both features unless a separate embedding key is set.
+    apiKey:
+      explicitKey ??
+      (provider === "gemini" ? trimmed(process.env.GEMINI_API_KEY) : null),
     sendDimensions:
       (trimmed(process.env.EMBEDDING_SEND_DIMENSIONS) ?? "false").toLowerCase() ===
       "true",

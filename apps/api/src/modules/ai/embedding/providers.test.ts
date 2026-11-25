@@ -14,6 +14,7 @@ import {
 import type { EmbeddingSettings } from "./settings.js";
 import {
   EmbeddingConfigError,
+  EmbeddingConnectionError,
   EmbeddingModelError,
 } from "./errors.js";
 
@@ -55,6 +56,13 @@ test("the provider is selected from settings, not from a single hard-coded backe
   );
 
   assert.equal(createEmbeddingProvider(settings({ provider: "fixture" })).name, "fixture");
+
+  assert.equal(
+    createEmbeddingProvider(
+      settings({ provider: "gemini", model: "gemini-embedding-001" })
+    ).name,
+    "gemini"
+  );
 });
 
 test("an unknown provider is a configuration error, not a silent fallback", () => {
@@ -303,4 +311,269 @@ test("an unconfigured OpenAI-compatible provider explains itself instead of fail
     () => provider.embed(["first"]),
     (error: unknown) => error instanceof EmbeddingConfigError
   );
+});
+
+/* ------------------------------------------------------------------ gemini */
+
+type GeminiRequest = {
+  method: string;
+  url: string;
+  apiKey: string | undefined;
+  body: Record<string, unknown> | null;
+};
+
+/**
+ * One server for both Gemini endpoints the provider uses: the embedding call is
+ * a POST to `:batchEmbedContents`, the health probe is a GET of `/v1beta/models`.
+ */
+async function startGeminiServer(options: {
+  batchStatus?: number;
+  batch?: unknown;
+  models?: unknown;
+}): Promise<{ url: string; requests: GeminiRequest[]; close: () => void }> {
+  const requests: GeminiRequest[] = [];
+
+  const server = http.createServer((request, response) => {
+    let raw = "";
+    request.on("data", (chunk: Buffer) => {
+      raw += chunk.toString("utf8");
+    });
+    request.on("end", () => {
+      requests.push({
+        method: request.method ?? "GET",
+        url: request.url ?? "",
+        apiKey: request.headers["x-goog-api-key"] as string | undefined,
+        body: raw ? (JSON.parse(raw) as Record<string, unknown>) : null,
+      });
+
+      const isBatch = (request.url ?? "").includes(":batchEmbedContents");
+      response.writeHead(isBatch ? options.batchStatus ?? 200 : 200, {
+        "Content-Type": "application/json",
+      });
+      response.end(
+        JSON.stringify(isBatch ? options.batch ?? {} : options.models ?? {})
+      );
+    });
+  });
+
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address() as AddressInfo;
+
+  return {
+    url: `http://127.0.0.1:${address.port}`,
+    requests,
+    close: () => server.close(),
+  };
+}
+
+function geminiSettings(overrides: Partial<EmbeddingSettings> = {}): EmbeddingSettings {
+  return settings({
+    provider: "gemini",
+    model: "gemini-embedding-001",
+    apiKey: "test-key",
+    ...overrides,
+  });
+}
+
+test("the Gemini adapter asks for the stored width with a document task type and normalises", async () => {
+  const server = await startGeminiServer({
+    // Deliberately not unit length: the adapter must normalise, not the caller.
+    batch: { embeddings: [{ values: [3, 4] }, { values: [0, 2] }] },
+  });
+
+  try {
+    const provider = createEmbeddingProvider(
+      geminiSettings({ baseUrl: server.url, dimensions: 2 })
+    );
+
+    const batch = await provider.embed(["doc one", "doc two"]);
+
+    assert.deepEqual(batch.embeddings, [
+      [0.6, 0.8],
+      [0, 1],
+    ]);
+    assert.equal(batch.model, "gemini-embedding-001");
+
+    const [captured] = server.requests;
+    assert.equal(captured?.apiKey, "test-key");
+    assert.match(captured?.url ?? "", /\/v1beta\/models\/gemini-embedding-001:batchEmbedContents$/);
+
+    const requests = captured?.body?.requests as Record<string, unknown>[];
+    assert.equal(requests.length, 2);
+    assert.deepEqual(requests[0], {
+      model: "models/gemini-embedding-001",
+      content: { parts: [{ text: "doc one" }] },
+      taskType: "RETRIEVAL_DOCUMENT",
+      outputDimensionality: 2,
+    });
+  } finally {
+    server.close();
+  }
+});
+
+test("a query is embedded with the retrieval-query task type", async () => {
+  const server = await startGeminiServer({
+    batch: { embeddings: [{ values: [1, 0] }] },
+  });
+
+  try {
+    const provider = createEmbeddingProvider(
+      geminiSettings({ baseUrl: server.url, dimensions: 2 })
+    );
+
+    await provider.embed(["why is login slow"], "query");
+
+    const requests = server.requests[0]?.body?.requests as Record<string, unknown>[];
+    assert.equal(requests[0]?.taskType, "RETRIEVAL_QUERY");
+  } finally {
+    server.close();
+  }
+});
+
+test("a Gemini response with the wrong number of vectors is rejected", async () => {
+  const server = await startGeminiServer({
+    batch: { embeddings: [{ values: [1, 0] }] },
+  });
+
+  try {
+    const provider = createEmbeddingProvider(
+      geminiSettings({ baseUrl: server.url, dimensions: 2 })
+    );
+
+    await assert.rejects(
+      () => provider.embed(["first", "second"]),
+      (error: unknown) =>
+        error instanceof EmbeddingModelError &&
+        /returned 1 vectors for 2 inputs/.test(error.message)
+    );
+  } finally {
+    server.close();
+  }
+});
+
+test("Gemini rate limiting and a missing model are distinct failures", async () => {
+  const limited = await startGeminiServer({ batchStatus: 429, batch: {} });
+
+  try {
+    const provider = createEmbeddingProvider(
+      geminiSettings({ baseUrl: limited.url, dimensions: 2 })
+    );
+
+    await assert.rejects(
+      () => provider.embed(["first"]),
+      (error: unknown) =>
+        error instanceof EmbeddingConnectionError && /429/.test(error.message)
+    );
+  } finally {
+    limited.close();
+  }
+
+  const missing = await startGeminiServer({ batchStatus: 404, batch: {} });
+
+  try {
+    const provider = createEmbeddingProvider(
+      geminiSettings({ baseUrl: missing.url, dimensions: 2 })
+    );
+
+    await assert.rejects(
+      () => provider.embed(["first"]),
+      (error: unknown) =>
+        error instanceof EmbeddingModelError && /not available for embedding/.test(error.message)
+    );
+  } finally {
+    missing.close();
+  }
+});
+
+test("the Gemini health probe lists models instead of spending an embedding call", async () => {
+  const server = await startGeminiServer({
+    models: {
+      models: [
+        { name: "models/gemini-embedding-001" },
+        { name: "models/gemini-2.5-flash" },
+      ],
+    },
+  });
+
+  try {
+    const provider = createEmbeddingProvider(
+      geminiSettings({ baseUrl: server.url, dimensions: 2 })
+    );
+
+    const probe = await provider.probe();
+    assert.equal(probe.ok, true);
+
+    assert.equal(server.requests.length, 1);
+    assert.equal(server.requests[0]?.method, "GET");
+    assert.match(server.requests[0]?.url ?? "", /^\/v1beta\/models/);
+  } finally {
+    server.close();
+  }
+});
+
+test("a model the service does not list makes the probe fail with the reason", async () => {
+  const server = await startGeminiServer({
+    models: { models: [{ name: "models/text-embedding-004" }] },
+  });
+
+  try {
+    const provider = createEmbeddingProvider(
+      geminiSettings({ baseUrl: server.url, dimensions: 2 })
+    );
+
+    const probe = await provider.probe();
+    assert.equal(probe.ok, false);
+    assert.match(probe.message, /does not list model 'gemini-embedding-001'/);
+  } finally {
+    server.close();
+  }
+});
+
+test("a Gemini provider without a key explains itself instead of failing at boot", async () => {
+  const provider = createEmbeddingProvider(
+    geminiSettings({ apiKey: null, baseUrl: "https://example.test" })
+  );
+
+  const probe = await provider.probe();
+  assert.equal(probe.ok, false);
+  assert.match(probe.message, /GEMINI_API_KEY/);
+
+  await assert.rejects(
+    () => provider.embed(["first"]),
+    (error: unknown) => error instanceof EmbeddingConfigError
+  );
+});
+
+test("EMBEDDING_PROVIDER=gemini defaults to Gemini's own model, host and key", async () => {
+  const previous = {
+    EMBEDDING_PROVIDER: process.env.EMBEDDING_PROVIDER,
+    EMBEDDING_MODEL: process.env.EMBEDDING_MODEL,
+    OLLAMA_EMBEDDING_MODEL: process.env.OLLAMA_EMBEDDING_MODEL,
+    EMBEDDING_BASE_URL: process.env.EMBEDDING_BASE_URL,
+    EMBEDDING_API_KEY: process.env.EMBEDDING_API_KEY,
+    GEMINI_API_KEY: process.env.GEMINI_API_KEY,
+  };
+
+  process.env.EMBEDDING_PROVIDER = "gemini";
+  delete process.env.EMBEDDING_MODEL;
+  delete process.env.OLLAMA_EMBEDDING_MODEL;
+  delete process.env.EMBEDDING_BASE_URL;
+  delete process.env.EMBEDDING_API_KEY;
+  process.env.GEMINI_API_KEY = "from-gemini";
+
+  try {
+    const { readEmbeddingSettings } = await import("./settings.js");
+    const read = readEmbeddingSettings();
+
+    // Inheriting nomic's name here would send a model Gemini does not serve.
+    assert.equal(read.model, "gemini-embedding-001");
+    assert.equal(read.baseUrl, "https://generativelanguage.googleapis.com");
+    assert.equal(read.apiKey, "from-gemini");
+    assert.equal(read.provider, "gemini");
+  } finally {
+    for (const [name, value] of Object.entries(previous)) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
+  }
 });

@@ -589,7 +589,7 @@ export async function retrieveRelevantChunks(
 
   // The keyword arm does not need the embedding, so both start together.
   const [embeddingResult, keywordResults] = await Promise.all([
-    generateEmbedding(trimmedQuery),
+    generateEmbedding(trimmedQuery, "query"),
     mode === "hybrid"
       ? searchFullText(trimmedQuery, orgId, candidateLimit, armOptions)
       : Promise.resolve([] as FullTextResult[]),

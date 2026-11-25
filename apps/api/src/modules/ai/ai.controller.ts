@@ -298,7 +298,7 @@ export const testSearchController = asyncHandler(async (req, res) => {
     throw createHttpError(400, "'limit' must be a positive integer");
   }
 
-  const embeddingResult = await generateEmbedding(query);
+  const embeddingResult = await generateEmbedding(query, "query");
   const results = await searchSimilar(
     embeddingResult.embedding,
     organizationId,
