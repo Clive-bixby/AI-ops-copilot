@@ -157,9 +157,11 @@ production logs into it. Set `LLM_PROVIDER` / `LLM_MODEL` to point generation at
 provider you are happy with; `/ai/health` reports which one will answer.
 
 Embeddings are separate, and the public demo runs `EMBEDDING_PROVIDER=fixture`:
-search replays vectors recorded from the seeded corpus, so no upload is embedded
-by any provider. Ingesting a new document needs a real embedder (`ollama` or
-`openai-compatible`), and that backend sees every chunk it embeds — see
+search replays vectors recorded from the seeded corpus and six demo questions, so
+no upload is embedded by any provider. A question outside that recorded set fails
+with an explicit error instead of an invented vector. Ingesting a new document
+needs a real embedder (`ollama` or `openai-compatible`), and that backend sees
+every chunk it embeds — see
 [embedding providers](#embedding-providers) and
 [the deployment notes](docs/deployment.md#41-data-handling-what-leaves-the-deployment).
 

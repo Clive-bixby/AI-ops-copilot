@@ -153,11 +153,20 @@ Two rules that are not negotiable:
   cannot produce 768 dimensions needs a migration first.
 - **Fixture mode only knows recorded text.** It never invents a vector, so it
   fails with an explicit error for anything unrecorded. That applies to **free-text
-  search queries too**: the retained fixture holds the seeded chunks and the
-  questions from the evaluation set, so a demo visitor who types their own query
-  gets a 503 explaining the limit. That is the honest version of a $0 demo — the
-  seeded corpus and its recorded questions work with real vectors, nothing else
-  does.
+  search queries too**: the fixture holds the seeded demo chunks, six recorded demo
+  questions and the investigation-evaluation texts CI replays, so a demo visitor
+  who types their own query gets a 503 explaining the limit. That is the honest
+  version of a $0 demo — the seeded corpus and its recorded questions work with
+  real vectors, nothing else does. The six questions are:
+
+  ```
+  How do we recover from PostgreSQL connection pool exhaustion?
+  Why are large uploads failing with 413?
+  What is the rollback procedure for a failed deployment?
+  Why did checkout start failing after release 1.42.0?
+  How do I restore the production database from a backup?
+  What causes Redis key evictions?
+  ```
 - If a demo must accept arbitrary documents *and* arbitrary questions, it needs a
   real embedding API (`openai-compatible`) or a machine that runs Ollama. There is
   no third option that stays free and correct.
