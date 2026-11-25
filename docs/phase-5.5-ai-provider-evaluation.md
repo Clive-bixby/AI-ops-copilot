@@ -333,8 +333,8 @@ Observations that matter for model selection:
    Recall@10 alone would be noise.
 4. **Hybrid latency is dominated by Ollama on the host** (30–160 ms per query embedding). This number says
    nothing about a cloud provider; cloud latency must be measured separately (§5.3).
-5. Vector-only misses 4 queries outright (`PGPOOL_MAX environment variable`, `429 responses…`), which the
-   keyword arm rescues — the RRF fusion is doing real work. **No embedding change may be allowed to reduce
+5. Vector-only returns nothing at all for 2 queries (`PGPOOL_MAX environment variable`, `429 responses…`), which
+   the keyword arm rescues — the RRF fusion is doing real work. **No embedding change may be allowed to reduce
    the keyword arm's contribution.**
 
 ### 5.2 Harness upgrade needed before candidate comparison
@@ -421,17 +421,88 @@ ordering beyond the scored items. Two more queries swap two non-relevant extras 
 between keyword-only candidates), which predates this change -- the harness only applies the same ranking and
 reports it. A deterministic tie-break would fix the ordering but changes app behaviour, so it is not in M5.
 
-### 5.3 Candidate results
+### 5.3 Candidate results — `gemini-embedding-001`, measured 2026-11-25
 
-**Untested.** No cloud embedding call was made: there is no API key in this repository and §9 of the brief
-forbids quota-consuming experiments before approval. The exact protocol above is what produces the numbers;
-§5.1 is the baseline those numbers will be compared against. Reporting a recall figure for a model that was
-never run would be fabrication.
+Same corpus, same labels, same scorer as §5.1 and §5.2.1; each embedder runs into its own ephemeral
+organization, so the two runs cannot share a vector space. Both were run inside the `api` container:
 
-Expected-cost disclosure for the sweep: the whole corpus is ≈ 32 docs + 6 tickets + 6 log groups ≈ **210
-chunks ≈ 60 K tokens per provider per mode**, plus 36 query embeddings × 3 queries-set variants. One provider
-run is < 100 K tokens — inside every candidate's free monthly allowance, and ~0.05 % of Voyage's one-time
-200 M grant. This is a cheap experiment; it is deferred only because the brief puts an approval gate first.
+```bash
+docker compose exec -T api npm run eval:retrieval -- --provider gemini --model gemini-embedding-001 --json /tmp/gemini-standard.json
+docker compose exec -T api npm run eval:retrieval -- --provider gemini --model gemini-embedding-001 --queries hard --json /tmp/gemini-hard.json
+```
+
+Payloads: `.eval/gemini-standard.json`, `.eval/gemini-hard.json` (gitignored). 768 d, `RETRIEVAL_DOCUMENT`
+for the corpus and `RETRIEVAL_QUERY` for queries.
+
+**Standard set (36 queries)**
+
+| Embedder | Mode | Recall@10 | MRR@10 | nDCG@10 | KW-only@10 | Top-hit sim p10 / p50 / p90 | docs @10 | tickets @10 | logs @10 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| nomic | vector | 0.8796 | 0.9306 | 0.8866 | 0.00 | 0.6926 / 0.7730 / 0.8443 | 0.9394 | 0.8333 | 0.5455 |
+| nomic | hybrid | **0.9907** | **0.9861** | **0.9792** | 2.75 | 0.6926 / 0.7730 / 0.8443 | 1.0000 | 1.0000 | 0.9091 |
+| gemini | vector | **0.9537** | **0.9444** | **0.9342** | 0.00 | 0.6825 / 0.7544 / 0.7956 | 0.9697 | 1.0000 | 0.8182 |
+| gemini | hybrid | 0.9907 | 0.9722 | 0.9721 | 2.75 | 0.6825 / 0.7544 / 0.7956 | 1.0000 | 1.0000 | 0.9091 |
+
+**Hard set (12 held-out queries)**
+
+| Embedder | Mode | Recall@10 | MRR@10 | nDCG@10 | KW-only@10 | Top-hit sim p10 / p50 / p90 | docs @10 | tickets @10 | logs @10 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| nomic | vector | 0.5139 | 0.6667 | 0.5511 | 0.00 | 0.6749 / 0.7182 / 0.7715 | 0.6000 | 1.0000 | 0.0000 |
+| nomic | hybrid | 0.9028 | 0.9583 | 0.8901 | 2.83 | 0.6749 / 0.7182 / 0.7715 | 1.0000 | 1.0000 | 0.5714 |
+| gemini | vector | **0.7500** | **0.8750** | **0.7577** | 0.00 | 0.6848 / 0.7087 / 0.7442 | 0.8000 | 1.0000 | 0.4286 |
+| gemini | hybrid | **0.9306** | 0.9583 | **0.9147** | 2.75 | 0.6848 / 0.7087 / 0.7442 | 1.0000 | 1.0000 | 0.7143 |
+
+Latency and throughput (free tier, from the same runs): query embedding **p50 425 ms, p90 519 ms** on the
+standard set and **p50 408 ms, p90 438 ms** on the hard set, including the vector-search round trip (2–4 ms).
+Ingesting the corpus took **20.6 s for 44 chunks ≈ 2.1 chunks/s end-to-end**: each labelled source is one
+chunk, so every source is its own HTTP request and the batch-of-16 path is never exercised at this corpus
+size.
+
+What the numbers say:
+
+1. **The vector arm is clearly better, and that is where the headroom was.** Standard recall@10 0.8796 →
+   0.9537; hard recall@10 0.5139 → 0.7500. On the standard set nomic's vector arm returns nothing for two
+   queries (`PGPOOL_MAX environment variable`, `429 responses from the public API`) and gemini's for one
+   (`pg_stat_activity idle in transaction`), with nomic also short on the multi-source queries. On the hard set
+   nomic's vector arm missed
+   H1, H4, H5 and H9 — all four rescued by the keyword arm — while gemini's misses only H11
+   (`what happens at twenty-one days before expiry`), which nomic found at rank 1 and the keyword arm still
+   rescues for gemini. That is the honest trade: gemini fixes the paraphrase and log-group cases and loses the
+   one query where a literal number had to match a threshold name.
+2. **Log groups are the biggest single win.** Hard-set logs recall@10: vector 0.000 → 0.4286, hybrid
+   0.5714 → 0.7143; standard logs vector 0.5455 → 0.8182. This was the explicit open question in §13
+   ("whether Gemini's 768-d truncation preserves nomic-level recall on our log-group corpus") — it does, and
+   it exceeds it.
+3. **Hybrid is flat on the standard set and better on the hard set.** Standard hybrid recall@10 is 0.9907 for
+   both (the §5.1 ceiling — one query cannot be rescued by either arm), MRR 0.9861 → 0.9722 and nDCG 0.9792 →
+   0.9721. The whole distance is one query: `max connections per instance before the pool is saturated` puts
+   `n_k8s_nodepool` (a distractor) first and `d_pg_pool` second — the vector arm's own ordering survives fusion;
+   nomic had `d_pg_pool` first. Hard hybrid recall@10 0.9028 → 0.9306 and
+   nDCG 0.8901 → 0.9147, with the same two wins as the vector arm.
+4. **H12 (the negative case) still ranks the distractor first** — `n_k8s_nodepool` at rank 1 in both modes, so
+   gemini contributes 0 to it exactly as designed. H9 ("repeated key evictions since the deploy") stays at
+   rank 2 behind `d_redis` in both modes. H11 ("twenty-one days before expiry") is still a vector miss and is
+   still rescued by the keyword arm — the identifier arm keeps earning its place, and gemini does not reduce
+   its contribution (KW-only@10 2.75 vs 2.75 standard, 2.83 vs 2.75 hard).
+5. **Similarity moved down and the `0.65` cutoff still holds, with less margin.** Top-hit p50: standard 0.7730
+   → 0.7544, hard 0.7182 → 0.7087; p10: 0.6926 → 0.6825, 0.6749 → 0.6848. Every top hit is above
+   `AI_SEARCH_MIN_SIMILARITY=0.65` in both models, so the cutoff does not need to change for gemini and must
+   not be lowered blindly — but a hard query now sits ~0.02 above it instead of ~0.03, so recalibration is part
+   of M8, not something to guess from one corpus.
+
+**Free-tier rate limiting, and the retry it forced.** A run makes ~116 `batchEmbedContents` requests (44
+corpus sources + 36 vector + 36 hybrid queries), which crosses the free tier's per-minute cap. The first
+attempt died with a 429 mid-run, so `GeminiEmbeddingProvider` now retries a 429 up to three times (10 s, 30 s,
+60 s) before raising the same `EmbeddingConnectionError`; a 429 with no backoff left is unchanged, and a huge
+`retryDelay` (the daily-quota case) is deliberately not honoured so a request cannot hang for minutes. Exactly
+one call in the standard run needed it (two waits, 40.9 s total); the hard run and every other call were
+clean. **The `Avg ms` column for that run (1585 ms hybrid) includes that wait and is not provider latency** —
+use the p50/p90 above. A retry test was added (`429` then `200` → one repeated call), 292/292 tests pass.
+
+Cost of the sweep, for the record: 232 embedding requests total (two runs × 116), ≈ 44 chunks ≈ 15 K tokens
+of corpus per run plus 72 short queries. The corpus is smaller than the ≈ 210-chunk / 60 K-token figure §5.1
+assumed: one chunk per labelled source, which is why the request count — not the token count — is the binding
+limit on the free tier. This is a cheap experiment, and it stays inside a single day's free allowance.
 
 ---
 
@@ -1063,7 +1134,7 @@ month, not thousands"** — which is exactly the stated goal, and no more.
 | R1 | Free-tier quotas are unverifiable from public docs (Gemini removed its static table); numbers may differ per project | High — invalidates capacity maths | Read the AI Studio rate-limit page once at implementation and record actuals in this doc; keep the fallback wired |
 | R2 | Free tiers can change or vanish (Cerebras now card-gated; Mistral dropped free API access) | High | Provider config, not code, chooses the backend; no vendor SDK in the app (plain axios) |
 | R3 | Recommending a cloud embedder means free-tier **data use for product improvement** on a *public* demo | High | State it in README/UI; keep `fixture` as the demo default for anything user-supplied; never send real secrets/logs |
-| R4 | Similarity thresholds (`0.65`, `0.88/0.78`) are nomic-calibrated; a naive model swap silently degrades recall or inflates confidence | High | M3 in §11.2 is blocking; the eval harness prints the similarity distribution |
+| R4 | Similarity thresholds (`0.65`, `0.88/0.78`) are nomic-calibrated; a naive model swap silently degrades recall or inflates confidence | High | M3 in §11.2 is blocking; the eval harness prints the similarity distribution (`gemini-embedding-001` measured in §5.3: top-hit p10 0.68, i.e. above `0.65` but with less margin) |
 | R5 | The retrieval harness is at ceiling (R@10 0.99) and cannot rank good models | Medium — could pick the wrong model | Add the hard query set + per-source-type recall (§5.2) before comparing |
 | R6 | Gemini free-tier throttling during a live demo | Medium | Fallback provider + pre-demo warm-check via `/ai/health`; cache/limit demo traffic |
 | R7 | `gpt-oss-120b`'s higher summarisation-hallucination rate (14.2 % HHEM) could leak in via fallback | Medium | Log `fallback: true`; show the model that answered; do not fall back for the refusal-required case (L8) |
@@ -1074,8 +1145,9 @@ month, not thousands"** — which is exactly the stated goal, and no more.
 | R12 | No published benchmark exists for multi-source root-cause reasoning | — | Accept; that is why §4 exists. Label any claim about it as measured-locally, not benchmarked |
 
 **Explicitly untested in this phase:** every cloud LLM and embedding candidate against OpsPilot's prompts
-(no key, quota gate); Gemini free-tier actual RPM/RPD/TPM; Voyage/Jina data-retention terms (no official
-page found); whether Gemini's 768-d truncation preserves nomic-level recall on *our* log-group corpus.
+(no key, quota gate); Gemini free-tier published RPM/RPD/TPM (the per-minute cap is measured indirectly: a
+~116-request run trips it, §5.3); Voyage/Jina data-retention terms (no official page found). Gemini's 768-d
+recall on *our* log-group corpus is no longer open — it is measured in §5.3 and is better than nomic's.
 
 ---
 
@@ -1091,7 +1163,7 @@ Each milestone is independently testable and independently revertible. **No mile
 | **M3** | ⏳ **Partial.** Two sweeps recorded: `qwen2.5:3b-instruct` (local Ollama, 24/24) and `gemini-2.5-flash-lite` (free tier, 20/24 — its 20/day quota). Ten flagged responses read and classified; four instrument defects found and fixed; the `l8` unrelated-evidence failure fixed in both prompts (24 local cases: hallucination 0.000, every insufficiency decision correct, fact coverage 0.722 — §6.2.1). A current model is now measured (`gemini-3.5-flash-lite`, 20 cases, §6.2.3) and the live guard check is confirmed (§6.2.2). **Remaining:** the four `gemini-2.5-flash-lite` cases (its quota was still spent on 2026-11-25) and Groq (needs a key) | §6.2 filled in with measured numbers; `review.md` per run | Every remaining flag traced to the model, not the scorer; re-scoring the same cache is byte-identical | 20 Gemini requests (`gemini-3.5-flash-lite`) + 4 local |
 | **M4** | ✅ **Done.** Embedding provider `gemini`: `batchEmbedContents`, `outputDimensionality 768`, task roles (document/query), unit-normalise, quota-free `probe()`; `EmbeddingProvider.embed()` took an optional role and the query paths (`retrieval.service`, `/ai/test-search`) now pass `"query"` | `embedding/gemini.provider.ts`; `/ai/health` reports `gemini` | 8 mocked-HTTP unit tests in `providers.test.ts` (no network); `npm run typecheck` clean; `npm test` 291/291; live `probe()` and one 768-d document embedding (norm 1.000) | 2 calls |
 | **M5** | ✅ **Done.** Harness upgrade: `--provider/--model` (own ephemeral organization per embedder), `--queries hard` (12 held-out queries), per-source-type recall@10, top-hit similarity p10/p50/p90, `--json <path>` | `eval:retrieval` flags + `hardEvaluationQueries` | Re-run of the 36-query baseline reproduces §5.1 recall/precision/MRR exactly; the one nDCG delta is recorded in §5.2.1 and traced to RRF tie ordering, not to this change | 0 (local) |
-| **M6** | Embedding comparison: run M5 for nomic, Gemini, (optionally Voyage) | §5.3 filled in with measured recall/precision/MRR/nDCG/latency/throughput | `eval:investigations` PASS for the candidate | < 300 K tokens |
+| **M6** | ✅ **Done.** Embedding comparison, nomic vs `gemini-embedding-001`, both query sets (§5.3). Gemini wins the vector arm everywhere (standard R@10 0.8796 → 0.9537, hard 0.5139 → 0.7500) and the hard hybrid (0.9028 → 0.9306); standard hybrid is at ceiling (0.9907 both). A run trips the free-tier per-minute cap, so the Gemini provider now retries a 429 three times before failing | §5.3 filled in with measured recall/MRR/nDCG, per-type recall, similarity p10/p50/p90, latency and ingestion throughput | 232 live embedding requests; `npm run typecheck` clean; `npm test` 292/292 (new retry test); both payloads re-read from `.eval/*.json` | ~232 requests, ≈ 30 K tokens |
 | **M7** | Decision record: final LLM + embedding choice with numbers; explicit accept/reject for each risk | `docs/phase-5.5-decision.md` | reviewed with you | 0 |
 | **M8** | **Only if M7 approves an embedding switch:** backup table, resumable backfill script (`--dry-run`), threshold recalibration, fixture re-record, `REINDEX CONCURRENTLY` | migration scripts + runbook | `eval:investigations` PASS; `eval:retrieval` no regression; rollback rehearsed on a scratch org | corpus tokens |
 | **M9** | Deployment wiring: `fixture` stays the public-demo default until M8 verified; document the privacy notice for unpaid tiers | README + `docs/deployment.md` updates | local end-to-end demo | small |
