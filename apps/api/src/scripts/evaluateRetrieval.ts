@@ -1,7 +1,10 @@
+import fs from "node:fs";
+
 import { pool } from "../core/db.js";
+import { getEmbeddingProvider, resetEmbeddingProvider } from "../modules/ai/embedding/index.js";
 import { retrieveRelevantChunks } from "../modules/ai/retrieval.service.js";
 import type { RetrievalMode } from "../modules/ai/retrieval.service.js";
-import { hashContent, hashLogEvent } from "../modules/ingestion/embeddingConfig.js";
+import { getEmbeddingConfig, hashContent, hashLogEvent } from "../modules/ingestion/embeddingConfig.js";
 import { indexDocument } from "../modules/ingestion/documentIngest.service.js";
 import { groupLogEvents, indexLogGroups } from "../modules/ingestion/logGroup.service.js";
 import { indexTicket } from "../modules/ingestion/ticketIngest.service.js";
@@ -11,7 +14,9 @@ import {
   evaluationNoiseDocuments,
   evaluationQueries,
   evaluationTickets,
+  hardEvaluationQueries,
 } from "../evaluation/retrievalDataset.js";
+import type { EvaluationQuery } from "../evaluation/retrievalDataset.js";
 
 /**
  * Retrieval evaluation.
@@ -23,6 +28,14 @@ import {
  * Run: npm run eval:retrieval
  * Keep the corpus for inspection: npm run eval:retrieval -- --keep
  * Small, noise-free corpus: npm run eval:retrieval -- --small
+ * Candidate model: npm run eval:retrieval -- --provider gemini --model gemini-embedding-001
+ * Held-out queries: npm run eval:retrieval -- --queries hard
+ * Machine-readable: npm run eval:retrieval -- --json .eval/retrieval.json
+ *
+ * `--provider` / `--model` seed and query one embedder into its own ephemeral
+ * organization, named after that provider, so two runs cannot share vectors.
+ * `--queries hard` swaps the 36-query set for the held-out one in §5.2; the
+ * default set is unchanged, which is what keeps the §5.1 numbers reproducible.
  *
  * By default the corpus includes distractor documents that share vocabulary with
  * the labelled sources, which is where an OR keyword arm can add noise. The
@@ -53,9 +66,33 @@ type QueryReport = {
       rankedKeys: string[];
       firstRelevantRank: number | null;
       matchTypes: Record<string, number>;
+      /** Cosine similarity of the top result; null when only keywords found it. */
+      topSimilarity: number | null;
       metrics: ModeMetrics;
     }
   >;
+};
+
+type QuerySet = "standard" | "hard";
+
+type Options = {
+  keep: boolean;
+  small: boolean;
+  queries: QuerySet;
+  provider: string | null;
+  model: string | null;
+  json: string | null;
+};
+
+/** The three families the corpus labels, by key prefix (d_/n_, t_, l_). */
+const SOURCE_TYPES = ["documents", "tickets", "logs"] as const;
+type SourceType = (typeof SOURCE_TYPES)[number];
+
+type SimilaritySummary = {
+  p10: number | null;
+  p50: number | null;
+  p90: number | null;
+  queriesWithVectorHit: number;
 };
 
 function emptyMetrics(): ModeMetrics {
@@ -101,10 +138,10 @@ function evaluateRanking(rankedKeys: string[], relevant: string[]): ModeMetrics 
   return metrics;
 }
 
-async function ensureOrganization(): Promise<string> {
+async function ensureOrganization(name: string): Promise<string> {
   const existing = await pool.query<{ id: string }>(
     `SELECT id FROM organizations WHERE name = $1 LIMIT 1`,
-    [ORG_NAME]
+    [name]
   );
 
   if (existing.rows[0]) {
@@ -113,7 +150,7 @@ async function ensureOrganization(): Promise<string> {
 
   const inserted = await pool.query<{ id: string }>(
     `INSERT INTO organizations (name) VALUES ($1) RETURNING id`,
-    [ORG_NAME]
+    [name]
   );
 
   return inserted.rows[0]!.id;
@@ -239,11 +276,12 @@ async function seedCorpus(
 async function runMode(input: {
   organizationId: string;
   mode: RetrievalMode;
+  queries: EvaluationQuery[];
   sourceKey: (sourceType: string, sourceId: string) => string | null;
 }): Promise<QueryReport[]> {
   const reports: QueryReport[] = [];
 
-  for (const item of evaluationQueries) {
+  for (const item of input.queries) {
     const startedAt = Date.now();
     const result = await retrieveRelevantChunks({
       organizationId: input.organizationId,
@@ -290,6 +328,7 @@ async function runMode(input: {
           rankedKeys,
           firstRelevantRank: firstRelevantRank === -1 ? null : firstRelevantRank + 1,
           matchTypes,
+          topSimilarity: result.chunks[0]?.similarity ?? null,
           metrics,
         },
       },
@@ -335,13 +374,169 @@ function format(value: number, digits = 4): string {
   return value.toFixed(digits);
 }
 
+function formatNullable(value: number | null): string {
+  return value === null ? "n/a" : format(value);
+}
+
+function fail(message: string): never {
+  console.error(message);
+  process.exit(1);
+}
+
+function parseArgs(argv: string[]): Options {
+  const options: Options = {
+    keep: false,
+    small: false,
+    queries: "standard",
+    provider: null,
+    model: null,
+    json: null,
+  };
+
+  for (let index = 0; index < argv.length; index += 1) {
+    const flag = argv[index]!;
+    // `fail` never returns, so the value is always a string.
+    const value = (): string => argv[index + 1] ?? fail(`${flag} needs a value`);
+
+    switch (flag) {
+      case "--keep":
+        options.keep = true;
+        break;
+      case "--small":
+        options.small = true;
+        break;
+      case "--queries": {
+        const raw = value();
+        index += 1;
+        if (raw !== "standard" && raw !== "hard") {
+          fail(`--queries must be "standard" or "hard" (received "${raw}").`);
+        }
+        options.queries = raw;
+        break;
+      }
+      case "--provider":
+        options.provider = value();
+        index += 1;
+        break;
+      case "--model":
+        options.model = value();
+        index += 1;
+        break;
+      case "--json":
+        options.json = value();
+        index += 1;
+        break;
+      default:
+        fail(
+          `Unknown flag "${flag}". Use --keep, --small, --queries standard|hard, --provider, --model, --json.`
+        );
+    }
+  }
+
+  return options;
+}
+
+/**
+ * Nearest-rank percentile. Null for an empty sample, so a run whose top hits
+ * were all keyword-only reports n/a rather than a made-up 0.
+ */
+function percentile(values: number[], fraction: number): number | null {
+  if (values.length === 0) {
+    return null;
+  }
+
+  const sorted = [...values].sort((a, b) => a - b);
+  const index = Math.round(fraction * (sorted.length - 1));
+
+  return sorted[index]!;
+}
+
+function summariseSimilarity(values: number[]): SimilaritySummary {
+  return {
+    p10: percentile(values, 0.1),
+    p50: percentile(values, 0.5),
+    p90: percentile(values, 0.9),
+    queriesWithVectorHit: values.length,
+  };
+}
+
+function topSimilarities(reports: QueryReport[], mode: RetrievalMode): number[] {
+  return reports
+    .map((report) => report.modes[mode].topSimilarity)
+    .filter((value): value is number => value !== null);
+}
+
+function sourceTypeOf(key: string): SourceType {
+  if (key.startsWith("t_")) {
+    return "tickets";
+  }
+  if (key.startsWith("l_")) {
+    return "logs";
+  }
+  return "documents";
+}
+
+/**
+ * Recall@10 split by source type, averaged over the queries that have a
+ * relevant source of that type. A cloud model can behave very differently on
+ * prose runbooks, terse tickets and log lines, and one pooled recall number
+ * hides exactly that.
+ */
+function recallBySourceType(
+  reports: QueryReport[],
+  mode: RetrievalMode
+): Record<SourceType, number | null> {
+  const totals = Object.fromEntries(
+    SOURCE_TYPES.map((type) => [type, { found: 0, total: 0 }])
+  ) as Record<SourceType, { found: number; total: number }>;
+
+  for (const report of reports) {
+    const ranked = new Set(report.modes[mode].rankedKeys.slice(0, TOP_K));
+
+    for (const key of report.relevant) {
+      const type = sourceTypeOf(key);
+      totals[type].total += 1;
+      if (ranked.has(key)) {
+        totals[type].found += 1;
+      }
+    }
+  }
+
+  return Object.fromEntries(
+    SOURCE_TYPES.map((type) => [
+      type,
+      totals[type].total === 0 ? null : totals[type].found / totals[type].total,
+    ])
+  ) as Record<SourceType, number | null>;
+}
+
 async function main(): Promise<void> {
-  const keep = process.argv.includes("--keep");
-  const small = process.argv.includes("--small");
-  const documents = small
+  const options = parseArgs(process.argv.slice(2));
+
+  // Environment before the provider is first built: the selection is cached for
+  // the process, so an override applied later would silently be ignored.
+  if (options.provider !== null) {
+    process.env.EMBEDDING_PROVIDER = options.provider;
+  }
+  if (options.model !== null) {
+    process.env.EMBEDDING_MODEL = options.model;
+  }
+  if (options.provider !== null || options.model !== null) {
+    resetEmbeddingProvider();
+  }
+
+  const embedding = getEmbeddingConfig();
+  const providerName = getEmbeddingProvider().name;
+  const queries =
+    options.queries === "hard" ? hardEvaluationQueries : evaluationQueries;
+  const documents = options.small
     ? evaluationDocuments
     : [...evaluationDocuments, ...evaluationNoiseDocuments];
-  const organizationId = await ensureOrganization();
+  // One organization per embedder: a run can never read another model's rows
+  // even if the SQL model filter were ever relaxed.
+  const organizationId = await ensureOrganization(
+    `${ORG_NAME} ${providerName}/${embedding.model}`
+  );
 
   try {
     await clearOrganization(organizationId);
@@ -350,11 +545,13 @@ async function main(): Promise<void> {
     const vectorReports = await runMode({
       organizationId,
       mode: "vector",
+      queries,
       sourceKey: map.sourceKey,
     });
     const hybridReports = await runMode({
       organizationId,
       mode: "hybrid",
+      queries,
       sourceKey: map.sourceKey,
     });
 
@@ -368,7 +565,11 @@ async function main(): Promise<void> {
 
     console.log("");
     console.log("Retrieval evaluation — vector-only baseline vs hybrid (RRF)");
-    console.log(`Corpus: ${documents.length} documents (${small ? 0 : evaluationNoiseDocuments.length} distractors), ${evaluationTickets.length} tickets, ${evaluationLogs.length} log events (${evaluationQueries.length} queries)`);
+    console.log(
+      `Embedding: ${providerName}/${embedding.model} (${embedding.dimensions} d)` +
+        ` · query set ${options.queries} (${queries.length})`
+    );
+    console.log(`Corpus: ${documents.length} documents (${options.small ? 0 : evaluationNoiseDocuments.length} distractors), ${evaluationTickets.length} tickets, ${evaluationLogs.length} log events`);
     console.log("");
     console.log("| Mode | Recall@5 | Recall@10 | Precision@5 | Precision@10 | MRR@10 | nDCG@10 | KW-only@10 | KW-only wrong@10 | Avg ms |");
     console.log("| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |");
@@ -385,10 +586,30 @@ async function main(): Promise<void> {
     }
 
     console.log("");
+    console.log(
+      "| Mode | Top-hit similarity p10 / p50 / p90 | Recall@10 documents | Recall@10 tickets | Recall@10 logs |"
+    );
+    console.log("| --- | --- | --- | --- | --- |");
+
+    for (const mode of modes) {
+      const reports = mode === "vector" ? vectorReports : hybridReports;
+      const similarity = summariseSimilarity(topSimilarities(reports, mode));
+      const byType = recallBySourceType(reports, mode);
+
+      console.log(
+        `| ${mode} | ${formatNullable(similarity.p10)} / ${formatNullable(
+          similarity.p50
+        )} / ${formatNullable(similarity.p90)} | ${formatNullable(
+          byType.documents
+        )} | ${formatNullable(byType.tickets)} | ${formatNullable(byType.logs)} |`
+      );
+    }
+
+    console.log("");
     console.log("| Query | Relevant | Vector rank | Hybrid rank | Vector top source | Hybrid top source |");
     console.log("| --- | --- | --- | --- | --- | --- |");
 
-    evaluationQueries.forEach((item, index) => {
+    queries.forEach((item, index) => {
       const vectorReport = vectorReports[index]!.modes.vector;
       const hybridReport = hybridReports[index]!.modes.hybrid;
       console.log(
@@ -400,15 +621,35 @@ async function main(): Promise<void> {
 
     const payload = {
       generatedAt: new Date().toISOString(),
+      embedding: {
+        provider: providerName,
+        model: embedding.model,
+        dimensions: embedding.dimensions,
+        configHash: embedding.hash,
+      },
+      querySet: { name: options.queries, count: queries.length },
       corpus: {
         documents: documents.length,
-        noiseDocuments: small ? 0 : evaluationNoiseDocuments.length,
+        noiseDocuments: options.small ? 0 : evaluationNoiseDocuments.length,
         tickets: evaluationTickets.length,
         logEvents: evaluationLogs.length,
-        queries: evaluationQueries.length,
       },
       summary,
-      perQuery: evaluationQueries.map((item, index) => ({
+      similarity: Object.fromEntries(
+        modes.map((mode) => [
+          mode,
+          summariseSimilarity(
+            topSimilarities(mode === "vector" ? vectorReports : hybridReports, mode)
+          ),
+        ])
+      ),
+      recallBySourceType: Object.fromEntries(
+        modes.map((mode) => [
+          mode,
+          recallBySourceType(mode === "vector" ? vectorReports : hybridReports, mode),
+        ])
+      ),
+      perQuery: queries.map((item, index) => ({
         query: item.query,
         relevant: item.relevant,
         vector: vectorReports[index]!.modes.vector,
@@ -416,10 +657,20 @@ async function main(): Promise<void> {
       })),
     };
 
+    if (options.json !== null) {
+      await fs.promises.writeFile(
+        options.json,
+        `${JSON.stringify(payload, null, 2)}\n`,
+        "utf8"
+      );
+      console.log("");
+      console.log(`JSON written to ${options.json}`);
+    }
+
     console.log("");
     console.log(`EVAL_JSON=${JSON.stringify(payload)}`);
   } finally {
-    if (!keep) {
+    if (!options.keep) {
       await pool.query(`DELETE FROM organizations WHERE id = $1`, [organizationId]);
     }
     await pool.end();

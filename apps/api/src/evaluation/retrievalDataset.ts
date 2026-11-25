@@ -562,3 +562,76 @@ export const evaluationQueries: EvaluationQuery[] = [
     relevant: ["d_redis", "l_redis", "t_login"],
   },
 ];
+
+/**
+ * Held-out queries for candidate comparison.
+ *
+ * These exist because the 36 queries above are close to saturated (§5.1:
+ * hybrid recall@10 is 0.9907) and reusing the corpus's own vocabulary cannot
+ * separate two good embedding models. Every query here avoids the words the
+ * relevant source uses -- no "Redis", "Kafka", "lag", "eviction" -- and is
+ * still labelled against the same sources, so the numbers are directly
+ * comparable with the standard set. Additive only: the 36-query set is
+ * untouched, so the published baseline stays reproducible.
+ *
+ * H12 is a negative control: the "relevant" source is a distractor document
+ * about Kubernetes node pools, which is the right answer for that question and
+ * the wrong answer for OpsPilot. A model that scores well here only by matching
+ * surface words will rank it for unrelated queries too. It needs the distractor
+ * corpus, so `--small` drops it from the labels by definition.
+ */
+export const hardEvaluationQueries: EvaluationQuery[] = [
+  {
+    query: "sessions are being silently dropped when the box runs out of room",
+    relevant: ["d_redis"],
+  },
+  {
+    query:
+      "Error: remaining connection slots are reserved for non-replication superuser connections at PG.connect",
+    relevant: ["d_pg_pool", "l_pool"],
+  },
+  {
+    query: "maximum number of pooled clients per server instance",
+    relevant: ["d_pg_pool"],
+  },
+  {
+    query: "TLS SNI cert rollover",
+    relevant: ["d_tls", "l_cert"],
+  },
+  {
+    query: "our event consumers have fallen behind the producers",
+    relevant: ["d_kafka", "l_kafka"],
+  },
+  {
+    query: "uploads are being rate limited by the bucket but the file is also too big",
+    relevant: ["d_s3", "l_s3", "t_upload"],
+  },
+  {
+    query: "did the release cause the slow logins or was the database already saturated",
+    relevant: ["d_pg_pool", "l_pool", "t_login"],
+  },
+  {
+    query: "checkout failures and delayed subscription updates, same root cause?",
+    relevant: ["d_gateway", "l_gateway", "t_webhook"],
+  },
+  {
+    // The published hard set asked for "repeated image pull failures after the
+    // deploy"; this corpus has no deploy log group, and adding one would move
+    // the corpus counts §5.1 is measured against. The closest held-out log-group
+    // query on the existing corpus is the Redis eviction warning.
+    query: "repeated key evictions since the deploy",
+    relevant: ["l_redis"],
+  },
+  {
+    query: "customer says search returns nothing after re-upload",
+    relevant: ["t_search"],
+  },
+  {
+    query: "what happens at twenty-one days before expiry",
+    relevant: ["d_tls"],
+  },
+  {
+    query: "how do we scale the kubernetes node pool",
+    relevant: ["n_k8s_nodepool"],
+  },
+];

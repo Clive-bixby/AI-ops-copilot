@@ -379,6 +379,48 @@ comparable with §5.1.
 H12 is deliberate: a candidate that scores 0 on it is behaving correctly, and the harness reports it
 alongside the others rather than folding it into an average.
 
+#### 5.2.1 Implemented (M5) — and the baseline still reproduces
+
+```bash
+npm run eval:retrieval                                         # the 36-query set, unchanged
+npm run eval:retrieval -- --queries hard                       # the 12 held-out queries
+npm run eval:retrieval -- --provider gemini --model gemini-embedding-001
+npm run eval:retrieval -- --json .eval/retrieval.json
+```
+
+- `--provider` / `--model` set `EMBEDDING_PROVIDER` / `EMBEDDING_MODEL` **before** the provider is built (it
+  is cached for the process), and the ephemeral organization is now named after the embedder
+  (`Retrieval Evaluation (ephemeral) ollama/nomic-embed-text`). Two models therefore cannot share vectors even
+  if the SQL model filter were ever relaxed.
+- `--queries hard` swaps in `hardEvaluationQueries`; the 36-query set, the corpus and the scoring are untouched.
+  One query is substituted: the published H9 ("repeated image pull failures") needs a deploy log group this
+  corpus does not have, and adding one would move the §5.1 counts, so it is "repeated key evictions since the
+  deploy" against `l_redis`.
+- Every run reports recall@10 split by source type and the top hit's similarity p10/p50/p90 per mode, and
+  `--json <path>` writes the whole payload (provider, model, dimensions, config hash, query set, corpus counts,
+  summary, similarity, per-type recall, per-query rankings). An unknown flag exits 1, so a typo cannot silently
+  run the default set.
+
+Measured on `nomic-embed-text`, 2026-11-25 (`.eval/retrieval-baseline.json`, `.eval/retrieval-hard.json`):
+
+| Set | Mode | Recall@10 | MRR@10 | nDCG@10 | KW-only@10 | Top-hit sim p10 / p50 / p90 | docs @10 | tickets @10 | logs @10 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| standard (36) | vector | 0.8796 | 0.9306 | 0.8866 | 0.00 | 0.6926 / 0.7730 / 0.8443 | 0.9394 | 0.8333 | 0.5455 |
+| standard (36) | hybrid | 0.9907 | 0.9861 | 0.9792 | 2.75 | 0.6926 / 0.7730 / 0.8443 | 1.0000 | 1.0000 | 0.9091 |
+| hard (12) | vector | 0.5139 | 0.6667 | 0.5511 | 0.00 | 0.6749 / 0.7182 / 0.7715 | 0.6000 | 1.0000 | 0.0000 |
+| hard (12) | hybrid | **0.9028** | **0.9583** | **0.8901** | 2.83 | 0.6749 / 0.7182 / 0.7715 | 1.0000 | 1.0000 | 0.5714 |
+
+The hard set does what §5.2 asked of it: vector-only recall falls from 0.88 to 0.51 while hybrid holds at 0.90,
+so there is now 0.39 of headroom in which a better embedder can separate -- and log groups are where the keyword
+arm earns its place (vector 0.00, hybrid 0.57).
+
+**Reproduction note.** Recall, precision, MRR and the per-type numbers reproduce §5.1 exactly. Hybrid nDCG reads
+0.9792 against the recorded 0.9801: in the gateway query `l_gateway` lands at rank 4 instead of 3, and the
+top-hit similarity distribution matches to four decimals, so the embeddings are the same and this is rank
+ordering beyond the scored items. Two more queries swap two non-relevant extras in the same way (equal RRF ranks
+between keyword-only candidates), which predates this change -- the harness only applies the same ranking and
+reports it. A deterministic tie-break would fix the ordering but changes app behaviour, so it is not in M5.
+
 ### 5.3 Candidate results
 
 **Untested.** No cloud embedding call was made: there is no API key in this repository and §9 of the brief
@@ -1048,7 +1090,7 @@ Each milestone is independently testable and independently revertible. **No mile
 | **M2** | ✅ **Done.** LLM eval harness: `src/scripts/evaluateLlm.ts` (`--record` / `--replay` / `--list`, `--case`, `--json`, `--report-only`), 24-case synthetic dataset across 12 scenarios, raw-response cache, deterministic scorers that reuse the production parsers, per-run `review.md` | `eval:llm` script; `.eval/llm-runs/` + `review.md` (gitignored) + `buildEvaluationPrompt()` so the harness sends the production prompt | Replay of hand-written fixtures twice → byte-identical output; invented evidence fails the gate (exit 1); a missing cache file refuses to score (exit 2); `npm test` 276/276 | 0 to build and verify (fixtures); ~118 K tok for the first real `--record` in M3 |
 | **M3** | ⏳ **Partial.** Two sweeps recorded: `qwen2.5:3b-instruct` (local Ollama, 24/24) and `gemini-2.5-flash-lite` (free tier, 20/24 — its 20/day quota). Ten flagged responses read and classified; four instrument defects found and fixed; the `l8` unrelated-evidence failure fixed in both prompts (24 local cases: hallucination 0.000, every insufficiency decision correct, fact coverage 0.722 — §6.2.1). A current model is now measured (`gemini-3.5-flash-lite`, 20 cases, §6.2.3) and the live guard check is confirmed (§6.2.2). **Remaining:** the four `gemini-2.5-flash-lite` cases (its quota was still spent on 2026-11-25) and Groq (needs a key) | §6.2 filled in with measured numbers; `review.md` per run | Every remaining flag traced to the model, not the scorer; re-scoring the same cache is byte-identical | 20 Gemini requests (`gemini-3.5-flash-lite`) + 4 local |
 | **M4** | ✅ **Done.** Embedding provider `gemini`: `batchEmbedContents`, `outputDimensionality 768`, task roles (document/query), unit-normalise, quota-free `probe()`; `EmbeddingProvider.embed()` took an optional role and the query paths (`retrieval.service`, `/ai/test-search`) now pass `"query"` | `embedding/gemini.provider.ts`; `/ai/health` reports `gemini` | 8 mocked-HTTP unit tests in `providers.test.ts` (no network); `npm run typecheck` clean; `npm test` 291/291; live `probe()` and one 768-d document embedding (norm 1.000) | 2 calls |
-| **M5** | Harness upgrade: `--provider/--model`, `--queries hard`, per-source-type recall, similarity distribution, JSON out | `eval:retrieval` flags | Re-run nomic baseline → must reproduce §5.1 exactly | 0 (local) |
+| **M5** | ✅ **Done.** Harness upgrade: `--provider/--model` (own ephemeral organization per embedder), `--queries hard` (12 held-out queries), per-source-type recall@10, top-hit similarity p10/p50/p90, `--json <path>` | `eval:retrieval` flags + `hardEvaluationQueries` | Re-run of the 36-query baseline reproduces §5.1 recall/precision/MRR exactly; the one nDCG delta is recorded in §5.2.1 and traced to RRF tie ordering, not to this change | 0 (local) |
 | **M6** | Embedding comparison: run M5 for nomic, Gemini, (optionally Voyage) | §5.3 filled in with measured recall/precision/MRR/nDCG/latency/throughput | `eval:investigations` PASS for the candidate | < 300 K tokens |
 | **M7** | Decision record: final LLM + embedding choice with numbers; explicit accept/reject for each risk | `docs/phase-5.5-decision.md` | reviewed with you | 0 |
 | **M8** | **Only if M7 approves an embedding switch:** backup table, resumable backfill script (`--dry-run`), threshold recalibration, fixture re-record, `REINDEX CONCURRENTLY` | migration scripts + runbook | `eval:investigations` PASS; `eval:retrieval` no regression; rollback rehearsed on a scratch org | corpus tokens |
