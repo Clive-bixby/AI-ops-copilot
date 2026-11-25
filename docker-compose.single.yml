@@ -74,7 +74,7 @@ services:
       JWT_SECRET: "${JWT_SECRET:?JWT_SECRET must be set; generate one with: openssl rand -hex 32}"
       JWT_EXPIRES_IN: ${JWT_EXPIRES_IN:-1d}
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
-      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-2.5-flash-lite}
+      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-3.5-flash-lite}
       GEMINI_API_BASE_URL: ${GEMINI_API_BASE_URL:-https://generativelanguage.googleapis.com}
       CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:4173}
       # Behind a platform router, rate limits must key on the real client IP.
