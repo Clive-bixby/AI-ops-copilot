@@ -507,6 +507,14 @@ The remaining cost is fact coverage, and it is real: `l3-symptom-vs-cause`, `a4-
 is why hallucination reads 0.000. On 24 cases with a 3B model this is what the gate buys: safety up, completeness
 down. It is a prompt-shaped trade, so a capable model may not pay it — unmeasured until the quota resets.
 
+The obvious next step was tried and rejected. Two lines — "name the cause, not its symptom, and say what the
+evidence rules out", and "when the question asks about order or timing, quote the timestamps" — recovered `a4`
+(2/2) and got `l6`'s ordering right, but re-broke `a3` (an over-refusal on its own error signature), cost `l1`
+a fact, and put hallucination back to 0.042 with insufficiency decisions at 3 of 4
+(`.eval/llm-runs/ollama-qwen25-3b-gate5`). Net fact coverage did not move: 0.722 before, 0.722 after. A prompt
+line that buys no completeness and costs the safety number is not a trade worth making, so the `gate4` wording
+ships and the remaining gap is recorded rather than tuned away.
+
 `gemini-2.5-flash-lite`'s cached 20 answers were re-scored after the change and are unchanged (`l8` still
 flagged), which is what re-scoring a cache must show: the fix changes what the model is asked, so it can only be
 proven by asking again — blocked by the 20/day quota.
