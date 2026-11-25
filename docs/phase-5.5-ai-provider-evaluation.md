@@ -452,6 +452,13 @@ for the corpus and `RETRIEVAL_QUERY` for queries.
 | gemini | vector | **0.7500** | **0.8750** | **0.7577** | 0.00 | 0.6848 / 0.7087 / 0.7442 | 0.8000 | 1.0000 | 0.4286 |
 | gemini | hybrid | **0.9306** | 0.9583 | **0.9147** | 2.75 | 0.6848 / 0.7087 / 0.7442 | 1.0000 | 1.0000 | 0.7143 |
 
+Precision is reported for completeness, not selection: it is structurally capped by the corpus (§5.1 point 2) so
+it moves only because more labelled sources are found. Precision@10, vector / hybrid — standard: nomic 0.1167 /
+0.1361, gemini 0.1306 / 0.1361; hard: nomic 0.0833 / 0.1500, gemini 0.1250 / 0.1583. The optional Voyage run was
+not made: there is still no key, and its 200 M-token grant never renews while `voyage-code-3` needs a
+`VECTOR(1024)` migration — that is an M8-scale commitment, and it would be judged on the same two gates this one
+failed.
+
 Latency and throughput (free tier, from the same runs): a vector-mode query round trip — embedding plus the
 pgvector search (2–4 ms) — is **p50 425 ms, p90 471 ms** on the standard set and **p50 408 ms, p90 429 ms** on
 the hard set; the hybrid arm adds the keyword work (p90 555 ms on the standard set, whose slowest query is the
@@ -862,6 +869,12 @@ worse on quota and quality evidence. Only `fixture` and a self-hosted endpoint a
 
 ### Embeddings: **Gemini `gemini-embedding-001`, 768 dims**
 
+> **Superseded by measurement.** This recommendation was written before the harness could discriminate. §5.3 has
+> now run it, and `gemini-embedding-001` fails the investigation gate (precision 0.875, two extras scored 0.75 /
+> 0.71 that no threshold can separate from the sources that belong) while being ~4.5× slower per investigation.
+> The decision record in `docs/phase-5.5-decision.md` therefore keeps `nomic-embed-text` as the default and does
+> **not** approve M8. The reasons below are what made it the candidate worth measuring, not a conclusion.
+
 Decisive reasons, in order:
 
 1. **Zero schema change.** 768 output fits `VECTOR(768)` and the existing HNSW index
@@ -1199,7 +1212,7 @@ Each milestone is independently testable and independently revertible. **No mile
 | **M4** | ✅ **Done.** Embedding provider `gemini`: `batchEmbedContents`, `outputDimensionality 768`, task roles (document/query), unit-normalise, quota-free `probe()`; `EmbeddingProvider.embed()` took an optional role and the query paths (`retrieval.service`, `/ai/test-search`) now pass `"query"` | `embedding/gemini.provider.ts`; `/ai/health` reports `gemini` | 8 mocked-HTTP unit tests in `providers.test.ts` (no network); `npm run typecheck` clean; `npm test` 291/291; live `probe()` and one 768-d document embedding (norm 1.000) | 2 calls |
 | **M5** | ✅ **Done.** Harness upgrade: `--provider/--model` (own ephemeral organization per embedder), `--queries hard` (12 held-out queries), per-source-type recall@10, top-hit similarity p10/p50/p90, `--json <path>` | `eval:retrieval` flags + `hardEvaluationQueries` | Re-run of the 36-query baseline reproduces §5.1 recall/precision/MRR exactly; the one nDCG delta is recorded in §5.2.1 and traced to RRF tie ordering, not to this change | 0 (local) |
 | **M6** | ✅ **Done.** Embedding comparison, nomic vs `gemini-embedding-001`, both query sets (§5.3). Gemini wins the vector arm everywhere (standard R@10 0.8796 → 0.9537, hard 0.5139 → 0.7500) and the hard hybrid (0.9028 → 0.9306); standard hybrid is at ceiling (0.9907 both). A run trips the free-tier per-minute cap, so the Gemini provider now retries a 429 three times before failing | §5.3 filled in with measured recall/MRR/nDCG, per-type recall, similarity p10/p50/p90, latency and ingestion throughput | 232 live embedding requests; both retrieval payloads read back from `.eval/*.json`; **`eval:investigations` FAILS with gemini** (precision 0.875 < 0.90, 2 related-grade extras at similarity 0.75/0.71 — `--breakdown` shows no threshold separates them from the found items, so the cause is the model, not the floor); `npm run typecheck` clean; `npm test` 292/292 (new retry test) | ~232 requests, ≈ 30 K tokens |
-| **M7** | Decision record: final LLM + embedding choice with numbers; explicit accept/reject for each risk | `docs/phase-5.5-decision.md` | reviewed with you | 0 |
+| **M7** | ✅ **Done, awaiting your review.** Decision record: `gemini-3.5-flash-lite` for every generation path (fallback still disabled), **no embedding switch** — nomic stays the default and **M8 is not approved**, thresholds untouched — plus accept/reject for R1–R12 and the open items | `docs/phase-5.5-decision.md` | every number traced to §5.3/§6.2; the gate failure that decides D3 is recorded, not tuned away | 0 |
 | **M8** | **Only if M7 approves an embedding switch:** backup table, resumable backfill script (`--dry-run`), threshold recalibration, fixture re-record, `REINDEX CONCURRENTLY` | migration scripts + runbook | `eval:investigations` PASS; `eval:retrieval` no regression; rollback rehearsed on a scratch org | corpus tokens |
 | **M9** | Deployment wiring: `fixture` stays the public-demo default until M8 verified; document the privacy notice for unpaid tiers | README + `docs/deployment.md` updates | local end-to-end demo | small |
 
