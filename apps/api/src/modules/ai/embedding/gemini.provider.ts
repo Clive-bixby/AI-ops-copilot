@@ -11,6 +11,7 @@ import type {
   EmbeddingProvider,
   EmbeddingRole,
 } from "./provider.js";
+import { GEMINI_BASE_URL } from "./settings.js";
 import type { EmbeddingSettings } from "./settings.js";
 
 type GeminiBatchResponse = {
@@ -30,13 +31,6 @@ const TASK_TYPES: Record<EmbeddingRole, string> = {
   document: "RETRIEVAL_DOCUMENT",
   query: "RETRIEVAL_QUERY",
 };
-
-/**
- * The documented maximum texts per `batchEmbedContents` call. Our ingestion
- * batches 16, so this is a guard against a future batch-size change, not a
- * routine split.
- */
-const MAX_REQUESTS_PER_CALL = 100;
 
 /**
  * Google documents that a `outputDimensionality` below 3 072 must be
@@ -72,19 +66,9 @@ export class GeminiEmbeddingProvider implements EmbeddingProvider {
   constructor(private readonly settings: EmbeddingSettings) {
     this.model = settings.model;
     this.dimensions = settings.dimensions;
-    this.endpoint =
-      settings.baseUrl ?? "(EMBEDDING_BASE_URL is not set)";
-  }
-
-  private requireBaseUrl(): string {
-    if (!this.settings.baseUrl) {
-      throw new EmbeddingConfigError(
-        "EMBEDDING_BASE_URL is required when EMBEDDING_PROVIDER=gemini " +
-          "(it defaults to https://generativelanguage.googleapis.com)."
-      );
-    }
-
-    return this.settings.baseUrl;
+    // The settings always supply Gemini's host; the fallback only covers a
+    // hand-built settings object (tests), never a configured deployment.
+    this.endpoint = settings.baseUrl ?? GEMINI_BASE_URL;
   }
 
   private requireApiKey(): string {
@@ -101,19 +85,11 @@ export class GeminiEmbeddingProvider implements EmbeddingProvider {
     texts: string[],
     role: EmbeddingRole = "document"
   ): Promise<EmbeddingBatch> {
-    const baseUrl = this.requireBaseUrl();
     const apiKey = this.requireApiKey();
-
-    if (texts.length > MAX_REQUESTS_PER_CALL) {
-      throw new EmbeddingModelError(
-        `Gemini accepts at most ${MAX_REQUESTS_PER_CALL} texts per embedding request; ` +
-          `received ${texts.length}.`
-      );
-    }
 
     try {
       const response = await axios.post<GeminiBatchResponse>(
-        `${baseUrl}/v1beta/models/${this.model}:batchEmbedContents`,
+        `${this.endpoint}/v1beta/models/${this.model}:batchEmbedContents`,
         {
           requests: texts.map((text) => ({
             model: `models/${this.model}`,
@@ -169,13 +145,13 @@ export class GeminiEmbeddingProvider implements EmbeddingProvider {
       if (error instanceof AxiosError) {
         if (error.code === "ECONNREFUSED" || error.code === "ENOTFOUND") {
           throw new EmbeddingConnectionError(
-            `Cannot connect to the embedding service at ${baseUrl}.`
+            `Cannot connect to the embedding service at ${this.endpoint}.`
           );
         }
 
         if (error.code === "ECONNABORTED" || error.code === "ETIMEDOUT") {
           throw new EmbeddingConnectionError(
-            `The embedding service at ${baseUrl} did not answer in time.`
+            `The embedding service at ${this.endpoint} did not answer in time.`
           );
         }
 
@@ -195,7 +171,7 @@ export class GeminiEmbeddingProvider implements EmbeddingProvider {
 
         if (status === 404) {
           throw new EmbeddingModelError(
-            `Model '${this.model}' is not available for embedding at ${baseUrl}.`
+            `Model '${this.model}' is not available for embedding.`
           );
         }
 
@@ -217,11 +193,9 @@ export class GeminiEmbeddingProvider implements EmbeddingProvider {
    * every page load, and listing is not billed as an embedding request.
    */
   async probe(): Promise<EmbeddingProbe> {
-    let baseUrl: string;
     let apiKey: string;
 
     try {
-      baseUrl = this.requireBaseUrl();
       apiKey = this.requireApiKey();
     } catch (error) {
       return {
@@ -235,7 +209,7 @@ export class GeminiEmbeddingProvider implements EmbeddingProvider {
 
     try {
       const response = await axios.get<GeminiModelsResponse>(
-        `${baseUrl}/v1beta/models`,
+        `${this.endpoint}/v1beta/models`,
         {
           timeout: 5_000,
           params: { pageSize: 1_000 },
@@ -247,15 +221,7 @@ export class GeminiEmbeddingProvider implements EmbeddingProvider {
         .map((entry) => entry.name?.replace(/^models\//, ""))
         .filter((id): id is string => typeof id === "string" && id.length > 0);
 
-      if (ids.length === 0) {
-        return {
-          ok: true,
-          message:
-            "The embedding service answered; it did not list its models",
-        };
-      }
-
-      if (!ids.includes(this.model)) {
+      if (ids.length > 0 && !ids.includes(this.model)) {
         return {
           ok: false,
           message: `The embedding service does not list model '${this.model}'. Available: ${ids
@@ -267,13 +233,16 @@ export class GeminiEmbeddingProvider implements EmbeddingProvider {
 
       return {
         ok: true,
-        message: "The embedding service answered and lists the model",
+        message:
+          ids.length === 0
+            ? "The embedding service answered; it did not list its models"
+            : "The embedding service answered and lists the model",
       };
     } catch (error) {
       const reason =
         error instanceof AxiosError
           ? error.code === "ECONNREFUSED"
-            ? `Cannot connect to ${baseUrl}`
+            ? `Cannot connect to ${this.endpoint}`
             : `Embedding service error: ${error.message}`
           : "Unknown error";
 

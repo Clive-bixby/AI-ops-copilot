@@ -35,7 +35,7 @@ const PROVIDER_ALIASES: Record<string, ProviderName> = {
 };
 
 /** Gemini serves embeddings from the same host as generation, under /v1beta. */
-const GEMINI_BASE_URL = "https://generativelanguage.googleapis.com";
+export const GEMINI_BASE_URL = "https://generativelanguage.googleapis.com";
 const GEMINI_EMBEDDING_MODEL = "gemini-embedding-001";
 
 export type EmbeddingSettings = {
