@@ -114,8 +114,12 @@ export function buildFollowUpPrompt(input: {
   const prompt = [
     "You are answering a follow-up question about an incident investigation.",
     "Use only the investigation facts, evidence and analysis below. Never invent facts,",
-    "sources, metrics or timestamps. If the provided material cannot answer the question,",
-    "say so plainly and set insufficient_context to true.",
+    "sources, metrics or timestamps.",
+    "",
+    "Decide first whether that material can answer the question. Material answers it only when it contains the",
+    "fact asked for, or a timestamp, system or error that settles it. If it does not, set insufficient_context",
+    "to true and say plainly that the material does not cover the question. Do not substitute a plausible",
+    "explanation from general knowledge, and do not answer as if the evidence had said more than it did.",
     "",
     "Investigation",
     `title: ${input.investigation.title}`,
@@ -138,6 +142,7 @@ export function buildFollowUpPrompt(input: {
       .map((_, index) => `E${index + 1}`)
       .join(", ") || "none available"}).`,
     "- An answer may cite no evidence when the question is about the investigation itself.",
+    "- When insufficient_context is true, the answer must not offer a cause, a value or a sequence of events.",
     `- Keep the answer under ${FOLLOW_UP_LIMITS.answerMax} characters.`,
     "- Reply with JSON only, no prose and no markdown fences.",
     "",

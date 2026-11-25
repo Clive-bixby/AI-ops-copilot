@@ -217,6 +217,50 @@ test("a 429 is retried and Retry-After is honoured", async () => {
   }
 });
 
+test("a 429 keeps the provider's own quota detail", async () => {
+  // Real free-tier body, trimmed: the sentence, not the status, is what tells an
+  // operator to wait a minute instead of waiting until tomorrow.
+  const quota =
+    "Generate content requests per day limit exceeded on Free Tier (quotaValue 20).";
+
+  const providers = [
+    {
+      label: "gemini",
+      settings: (baseUrl: string) => geminiSettings({ baseUrl, maxRetries: 0 }),
+    },
+    {
+      label: "openai-compatible",
+      settings: (baseUrl: string) => openAiSettings(baseUrl, { maxRetries: 0 }),
+    },
+  ];
+
+  for (const entry of providers) {
+    const server = await startServer([
+      { status: 429, body: { error: { message: quota } } },
+    ]);
+
+    try {
+      const provider = createLlmProvider({
+        ...entry.settings(server.url),
+        fallback: null,
+      });
+
+      await assert.rejects(
+        () => provider.generate({ prompt: "hello" }),
+        (error: unknown) => {
+          assert.ok(error instanceof LlmProviderError, `${entry.label}: wrong error`);
+          assert.equal(error.status, 429);
+          assert.match(error.message, /quotaValue 20/);
+          assert.match(error.message, /per day limit/);
+          return true;
+        }
+      );
+    } finally {
+      server.close();
+    }
+  }
+});
+
 test("a rejected credential is not retried and never echoes the key", async () => {
   const server = await startServer([
     { status: 401, body: { error: { message: "API key not valid" } } },

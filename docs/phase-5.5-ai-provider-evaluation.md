@@ -441,6 +441,7 @@ remaining failure is the model's**:
   was a website copy brief and an onboarding checklist. They produced load/symptom explanations instead of
   setting `insufficient_evidence`. This is the failure mode the case exists to catch, and it is the single most
   important number here: a confident answer built on unrelated evidence is worse than "I cannot tell".
+  **Fixed in both prompts after this sweep — see §6.2.1.**
 - `l6-follow-up-with-context` — `qwen2.5:3b` refused a question the evidence answers (image pull failure at
   09:58, failed promotion at 10:03). `gemini-2.5-flash-lite` answered it correctly from the timestamps. A
   small-model limitation, not a prompt defect.
@@ -461,6 +462,45 @@ four distinct **instrument** defects, all fixed in the harness rather than by re
 Hallucination rate fell from **0.250 to 0.083** (qwen, 24 cases) and **0.250 to 0.050** (flash-lite, 20 cases)
 once the instrument was right, with invented numbers going 8 → 0. This is the argument for keeping the harness:
 a scorer that punishes formatting is worse than no scorer, because the two real failures were buried in six.
+
+#### 6.2.1 The unrelated-evidence gate
+
+The prompts already said "if the evidence cannot support a cause, set `insufficient_evidence` to true", and both
+models ignored it on `l8`. The instruction was too weak for what it asked: the opening line said "explain the
+most likely cause", so a model that can always produce a cause always will. Both prompts now open with a
+relevance decision instead — evidence relates only when it shares a system, service, error or timestamp with the
+investigation, and "related but inconclusive is still evidence: analyse it" — and both reserve the insufficient
+flag for the case where nothing relates at all.
+
+The declaration is also now structural, not cosmetic: `parseAnalysisResponse` empties `hypotheses` whenever
+`insufficient_evidence` is true, because a stored cause next to a stored disclaimer is the exact output the
+case exists to reject.
+
+Re-recorded 24/24 on `qwen2.5:3b-instruct` after the change (`.eval/llm-runs/ollama-qwen25-3b-gate2`):
+
+| Metric | before the gate | after the gate |
+| --- | --- | --- |
+| `l8` refusal | answered with a cause | `insufficient_evidence=true`, no hypotheses |
+| hallucination rate | 0.083 | 0.083 |
+| refusal accuracy | 0.500 | 0.600 |
+| fact coverage | 0.826 | 0.785 |
+| citation precision | 1.000 | 0.958 |
+| invented numbers | 0 | 0 |
+
+The gate cost something, and it is worth naming:
+
+- `a3-kafka-lag-triage` now sets `insufficient_evidence` although its evidence names the lagging consumer group.
+  A 3B model over-applies "decide whether the evidence relates". Strengthening the rule the other way
+  ("if even one item mentions the system, the flag must be false") was tried and re-broke `l8`, so this wording is
+  the better trade: one over-refusal instead of one confident answer built on a copy brief.
+- `l7-citation-accuracy` stopped citing `E1` in `supports`. The prompt asks for the labels a hypothesis rests on;
+  the model dropped them. Nothing is hallucinated, but the claim is no longer traceable, so the case stays failing.
+- `l6` still refuses its answerable follow-up question. The follow-up prompt carries the same gate; it did not
+  help a 3B model read two timestamps.
+
+`gemini-2.5-flash-lite`'s cached 20 answers were re-scored after the change and are unchanged (`l8` still
+flagged), which is what re-scoring a cache must show: the fix changes what the model is asked, so it can only be
+proven by asking again — blocked by the 20/day quota.
 
 #### Provider constraints measured, not assumed
 
@@ -919,7 +959,7 @@ Each milestone is independently testable and independently revertible. **No mile
 | **M0** | ✅ **Done.** Seven review corrections applied (§0.1); `LLM_*` documented in `apps/api/.env.example` with fallback disabled | doc + env comments | reviewed | 0 |
 | **M1** | ✅ **Done.** `ai/llm/*`: one `generate()` for text and JSON, Gemini + OpenAI-compatible, retry/back-off/Retry-After, usage capture, opt-in fallback, sanitized logging; `rag.service` + `analysis.provider` wired; provider/model recorded from what answered | 7 source files + 1 test file | `npm run typecheck` clean; `npm test` 251/251; stub-provider end-to-end for `/ai/ask`, analysis and follow-up (§0.3) | **0** (stub) |
 | **M2** | ✅ **Done.** LLM eval harness: `src/scripts/evaluateLlm.ts` (`--record` / `--replay` / `--list`, `--case`, `--json`, `--report-only`), 24-case synthetic dataset across 12 scenarios, raw-response cache, deterministic scorers that reuse the production parsers, per-run `review.md` | `eval:llm` script; `.eval/llm-runs/` + `review.md` (gitignored) + `buildEvaluationPrompt()` so the harness sends the production prompt | Replay of hand-written fixtures twice → byte-identical output; invented evidence fails the gate (exit 1); a missing cache file refuses to score (exit 2); `npm test` 276/276 | 0 to build and verify (fixtures); ~118 K tok for the first real `--record` in M3 |
-| **M3** | ⏳ **Partial.** Two sweeps recorded: `qwen2.5:3b-instruct` (local Ollama, 24/24) and `gemini-2.5-flash-lite` (free tier, 20/24 — its 20/day quota). Ten flagged responses read and classified; four instrument defects found and fixed. Remaining: 4 flash-lite cases (`--resume --limit 24`), a current Gemini model (`gemini-3.8-flash` was 503), Groq (needs a key) | §6.2 filled in with measured numbers; `review.md` per run | Every remaining flag traced to the model, not the scorer; re-scoring the same cache is byte-identical | 20 Gemini requests, 0 local |
+| **M3** | ⏳ **Partial.** Two sweeps recorded: `qwen2.5:3b-instruct` (local Ollama, 24/24) and `gemini-2.5-flash-lite` (free tier, 20/24 — its 20/day quota). Ten flagged responses read and classified; four instrument defects found and fixed; the `l8` unrelated-evidence failure fixed in both prompts and re-measured locally (§6.2.1). Remaining: 4 flash-lite cases (`--resume --limit 24`), a current Gemini model (`gemini-3.8-flash` was 503), Groq (needs a key) | §6.2 filled in with measured numbers; `review.md` per run | Every remaining flag traced to the model, not the scorer; re-scoring the same cache is byte-identical | 20 Gemini requests, 0 local |
 | **M4** | Embedding provider `gemini`: `batchEmbedContents`, `outputDimensionality 768`, task roles (document/query), unit-normalise, quota-free `probe()`; extend `EmbeddingProvider.embed()` with optional role | `embedding/gemini.provider.ts`; `/ai/health` reports it | provider unit tests (`providers.test.ts` pattern); one documented 768-d vector fixture | ~10 calls |
 | **M5** | Harness upgrade: `--provider/--model`, `--queries hard`, per-source-type recall, similarity distribution, JSON out | `eval:retrieval` flags | Re-run nomic baseline → must reproduce §5.1 exactly | 0 (local) |
 | **M6** | Embedding comparison: run M5 for nomic, Gemini, (optionally Voyage) | §5.3 filled in with measured recall/precision/MRR/nDCG/latency/throughput | `eval:investigations` PASS for the candidate | < 300 K tokens |

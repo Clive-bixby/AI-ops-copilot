@@ -152,9 +152,15 @@ export function buildAnalysisPrompt(input: {
 
   const prompt = [
     "You are the incident analysis step of an operations copilot.",
-    "Explain the most likely cause of the described problem using only the evidence provided.",
-    "Never invent facts, sources, metrics or timestamps. If the evidence cannot support a cause,",
-    "say so plainly and set insufficient_evidence to true.",
+    "Use only the evidence provided. Never invent facts, sources, metrics or timestamps.",
+    "",
+    "Decide first whether the evidence relates to this investigation. It relates when it mentions the same system,",
+    "service, error or timestamp, or explains the described symptom. Unrelated evidence -- another team's copy",
+    "brief, an onboarding checklist -- does not relate.",
+    "Evidence that relates but is inconclusive is still evidence: analyse it, state plainly what it does and does",
+    "not establish, and keep insufficient_evidence false.",
+    "Set insufficient_evidence to true only when no evidence item relates to the investigation at all. Only then",
+    "leave hypotheses empty, and use next_steps to say which evidence should be linked. Do not name a cause.",
     "",
     "Investigation",
     `title: ${input.investigation.title}`,
@@ -174,6 +180,8 @@ export function buildAnalysisPrompt(input: {
     "- Put the same label in supports only if the evidence supports the hypothesis,",
     "  and in contradicts only if it argues against it.",
     "- A hypothesis without supporting evidence is allowed; leave supports empty.",
+    "- When insufficient_evidence is true, hypotheses must be empty: a named cause with no evidence is a guess.",
+    "- Cite the labels each hypothesis rests on in supports. An uncited claim cannot be checked against the evidence.",
     `- At most ${ANALYSIS_LIMITS.hypotheses} hypotheses, ${ANALYSIS_LIMITS.observations} observations and ${ANALYSIS_LIMITS.nextSteps} next steps.`,
     "- Reply with JSON only, no prose and no markdown fences.",
     "",
@@ -354,6 +362,11 @@ export function parseAnalysisResponse(
     }
   }
 
+  // A model that declares the evidence insufficient and then names a cause has
+  // contradicted itself. The declaration wins: storing the hypothesis would put a
+  // guess in the analysis while the same row says no evidence supports one.
+  const insufficientEvidence = record.insufficient_evidence === true;
+
   return {
     droppedCitations,
     analysis: {
@@ -368,13 +381,13 @@ export function parseAnalysisResponse(
         ANALYSIS_LIMITS.nextSteps,
         ANALYSIS_LIMITS.stepMax
       ),
-      insufficientEvidence: record.insufficient_evidence === true,
+      insufficientEvidence,
       missingInformation: readStringList(
         record.missing_information,
         ANALYSIS_LIMITS.missingInformation,
         ANALYSIS_LIMITS.missingInformationMax
       ),
-      hypotheses,
+      hypotheses: insufficientEvidence ? [] : hypotheses,
     },
   };
 }

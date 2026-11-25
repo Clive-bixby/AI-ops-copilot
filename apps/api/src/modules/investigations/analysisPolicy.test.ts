@@ -179,6 +179,27 @@ describe("parseAnalysisResponse", () => {
     assert.deepEqual(parsed.analysis.nextSteps, []);
     assert.equal(parsed.analysis.insufficientEvidence, false);
   });
+
+  it("empties the hypotheses of an analysis that declares the evidence insufficient", () => {
+    // The sweep produced exactly this: a declaration that the evidence does not
+    // cover the incident, plus a named cause. Storing both puts a guess and its
+    // disclaimer in the same row, so the declaration wins.
+    const parsed = parseAnalysisResponse(
+      JSON.stringify({
+        summary: "The linked evidence does not cover this incident.",
+        insufficient_evidence: true,
+        next_steps: ["Link the API logs for the incident window."],
+        hypotheses: [hypothesis({ statement: "Increased load caused the spike." })],
+      }),
+      ids
+    );
+
+    assert.equal(parsed.analysis.insufficientEvidence, true);
+    assert.deepEqual(parsed.analysis.hypotheses, []);
+    assert.deepEqual(parsed.analysis.nextSteps, [
+      "Link the API logs for the incident window.",
+    ]);
+  });
 });
 
 describe("statementHash", () => {
