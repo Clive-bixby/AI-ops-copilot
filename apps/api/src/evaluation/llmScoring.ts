@@ -229,10 +229,7 @@ export function scoreCase(input: {
       const analysis =
         input.evidenceRelevance === undefined
           ? result.analysis
-          : applyEvidenceSupportRule(
-              result.analysis,
-              input.evidenceRelevance.map((relevance) => ({ relevance }))
-            ).analysis;
+          : applyEvidenceSupportRule(result.analysis, input.evidenceRelevance);
       parsed = true;
       schemaValid = analysis.summary.length > 0;
       droppedCitations = result.droppedCitations;

@@ -217,8 +217,7 @@ export function buildAnalysisPrompt(input: {
  * A prompt can ask for a relevance decision, and a model can still answer from
  * the investigation's own wording: a live run on a linked copy brief stored two
  * hypotheses that cited no evidence at all. The parser cannot see relevance, so
- * the rule is applied where the evidence is known -- and skipped entirely when it
- * is not, so replaying an old recording still measures what was said.
+ * the rule is applied where the evidence is known, and skipped where it is not.
  *
  * Only uncited hypotheses on weak-or-absent evidence are affected: a cause that
  * cites evidence, or that was reasoned from direct/historical/related evidence,
@@ -226,24 +225,17 @@ export function buildAnalysisPrompt(input: {
  */
 export function applyEvidenceSupportRule(
   analysis: ParsedAnalysis,
-  evidence: { relevance: string }[]
-): { analysis: ParsedAnalysis; unsupported: number } {
-  if (analysis.hypotheses.length === 0) {
-    return { analysis, unsupported: 0 };
+  relevance: string[]
+): ParsedAnalysis {
+  const uncited =
+    analysis.hypotheses.length > 0 &&
+    analysis.hypotheses.every((item) => item.supports.length === 0);
+
+  if (!uncited || relevance.some((grade) => grade !== "weak")) {
+    return analysis;
   }
 
-  if (analysis.hypotheses.some((item) => item.supports.length > 0)) {
-    return { analysis, unsupported: 0 };
-  }
-
-  if (evidence.some((item) => item.relevance !== "weak")) {
-    return { analysis, unsupported: 0 };
-  }
-
-  return {
-    analysis: { ...analysis, insufficientEvidence: true, hypotheses: [] },
-    unsupported: analysis.hypotheses.length,
-  };
+  return { ...analysis, insufficientEvidence: true, hypotheses: [] };
 }
 
 function stripCodeFence(raw: string): string {

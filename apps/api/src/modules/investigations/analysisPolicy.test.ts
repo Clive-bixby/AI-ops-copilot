@@ -205,7 +205,7 @@ describe("parseAnalysisResponse", () => {
 
 describe("applyEvidenceSupportRule", () => {
   const ids = ["evidence-1", "evidence-2"];
-  const weak = [{ relevance: "weak" }, { relevance: "weak" }];
+  const weak = ["weak", "weak"];
 
   it("drops uncited hypotheses when every linked item is weak evidence", () => {
     // The live flash-lite run: a copy brief was the only evidence, and the model
@@ -223,9 +223,8 @@ describe("applyEvidenceSupportRule", () => {
 
     const guarded = applyEvidenceSupportRule(parsed.analysis, weak);
 
-    assert.equal(guarded.unsupported, 2);
-    assert.equal(guarded.analysis.insufficientEvidence, true);
-    assert.deepEqual(guarded.analysis.hypotheses, []);
+    assert.equal(guarded.insufficientEvidence, true);
+    assert.deepEqual(guarded.hypotheses, []);
   });
 
   it("keeps an uncited hypothesis when the evidence is more than weak", () => {
@@ -238,13 +237,10 @@ describe("applyEvidenceSupportRule", () => {
       ids
     );
 
-    const guarded = applyEvidenceSupportRule(parsed.analysis, [
-      { relevance: "direct" },
-      { relevance: "weak" },
-    ]);
+    const guarded = applyEvidenceSupportRule(parsed.analysis, ["direct", "weak"]);
 
-    assert.equal(guarded.unsupported, 0);
-    assert.equal(guarded.analysis.hypotheses.length, 1);
+    assert.equal(guarded.insufficientEvidence, false);
+    assert.equal(guarded.hypotheses.length, 1);
   });
 
   it("keeps a hypothesis that cites weak evidence", () => {
@@ -258,9 +254,8 @@ describe("applyEvidenceSupportRule", () => {
 
     const guarded = applyEvidenceSupportRule(parsed.analysis, weak);
 
-    assert.equal(guarded.unsupported, 0);
-    assert.equal(guarded.analysis.insufficientEvidence, false);
-    assert.deepEqual(guarded.analysis.hypotheses[0]?.supports, [ids[0]]);
+    assert.equal(guarded.insufficientEvidence, false);
+    assert.deepEqual(guarded.hypotheses[0]?.supports, [ids[0]]);
   });
 });
 

@@ -575,7 +575,10 @@ export async function analyzeInvestigation(input: {
     throw new RAGProviderError(reason);
   }
 
-  const guarded = applyEvidenceSupportRule(parsed.analysis, evidence);
+  const guarded = applyEvidenceSupportRule(
+    parsed.analysis,
+    evidence.map((item) => item.relevance)
+  );
 
   try {
     await persistSuccess({
@@ -584,7 +587,7 @@ export async function analyzeInvestigation(input: {
       analysisId,
       userId: input.userId,
       evidenceIds: prompt.evidenceIds,
-      parsed: guarded.analysis,
+      parsed: guarded,
       provider: generated.provider,
       model: generated.model,
       generationMs: generated.generationMs,
