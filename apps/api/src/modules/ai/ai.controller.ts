@@ -15,6 +15,7 @@ import {
   validateSourceTypes,
 } from "./retrieval.service.js";
 import { answerQuestion, validateRAGQuestion } from "./rag.service.js";
+import { readLlmSettings } from "./llm/index.js";
 
 /**
  * POST /ai/test-embedding
@@ -46,12 +47,38 @@ export const testEmbeddingController = asyncHandler(async (req, res) => {
  * with the model installed, an OpenAI-compatible API listing the model, or a
  * fixture file holding vectors.
  */
+/**
+ * Which generation model would answer, read from configuration without calling
+ * it. The endpoint used to report embeddings only, so a deployment could look
+ * healthy while every analysis pointed at a model that had since been retired.
+ */
+function describeGeneration() {
+  try {
+    const settings = readLlmSettings();
+
+    return {
+      provider: settings.provider,
+      model: settings.model,
+      fallback: settings.fallback
+        ? `${settings.fallback.provider}/${settings.fallback.model}`
+        : null,
+    };
+  } catch (error) {
+    return {
+      provider: process.env.LLM_PROVIDER?.trim() || "gemini",
+      model: "unconfigured",
+      fallback: null,
+      error: error instanceof Error ? error.message : "Generation is not configured.",
+    };
+  }
+}
+
 export const aiHealthController = asyncHandler(async (_req, res) => {
   const health = await checkEmbeddingHealth();
 
   const status = health.healthy ? 200 : 503;
 
-  return res.status(status).json(health);
+  return res.status(status).json({ ...health, generation: describeGeneration() });
 });
 
 /**
