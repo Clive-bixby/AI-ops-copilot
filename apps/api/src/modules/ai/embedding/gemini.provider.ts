@@ -51,6 +51,15 @@ function unitLength(vector: number[]): number[] {
 }
 
 /**
+ * The free tier caps `batchEmbedContents` per minute, and a corpus ingestion or
+ * an evaluation run can cross that cap in a burst. A 429 is transient, so a
+ * bounded wait beats failing a job that is already 90 % done. The cap is small
+ * because a daily-quota 429 never clears by waiting and must not stall a
+ * request for minutes.
+ */
+const RATE_LIMIT_BACKOFF_MS = [10_000, 30_000, 60_000];
+
+/**
  * Gemini embeddings (`POST /v1beta/models/{model}:batchEmbedContents`).
  *
  * `gemini-embedding-001` can emit 768 dimensions through `outputDimensionality`,
@@ -63,7 +72,11 @@ export class GeminiEmbeddingProvider implements EmbeddingProvider {
   readonly dimensions: number;
   readonly endpoint: string;
 
-  constructor(private readonly settings: EmbeddingSettings) {
+  constructor(
+    private readonly settings: EmbeddingSettings,
+    /** Injected by tests so exercising a retry does not sleep. */
+    private readonly backoffMs: readonly number[] = RATE_LIMIT_BACKOFF_MS
+  ) {
     this.model = settings.model;
     this.dimensions = settings.dimensions;
     // The settings always supply Gemini's host; the fallback only covers a
@@ -81,6 +94,42 @@ export class GeminiEmbeddingProvider implements EmbeddingProvider {
     return this.settings.apiKey;
   }
 
+  /**
+   * One batch call, retried while the API answers 429 and the backoff list has
+   * an entry left. Any other failure, or a 429 with no backoff left, is thrown
+   * to `embed` so it is mapped to the same explicit error as before.
+   */
+  private async postBatch(
+    body: unknown,
+    apiKey: string
+  ): Promise<{ data: GeminiBatchResponse }> {
+    for (let attempt = 0; ; attempt += 1) {
+      try {
+        return await axios.post<GeminiBatchResponse>(
+          `${this.endpoint}/v1beta/models/${this.model}:batchEmbedContents`,
+          body,
+          {
+            timeout: 120_000,
+            headers: {
+              "Content-Type": "application/json",
+              "x-goog-api-key": apiKey,
+            },
+          }
+        );
+      } catch (error) {
+        const delay = this.backoffMs[attempt];
+        const limited =
+          error instanceof AxiosError && error.response?.status === 429;
+
+        if (!limited || delay === undefined) {
+          throw error;
+        }
+
+        await new Promise((resolve) => setTimeout(resolve, delay));
+      }
+    }
+  }
+
   async embed(
     texts: string[],
     role: EmbeddingRole = "document"
@@ -88,8 +137,7 @@ export class GeminiEmbeddingProvider implements EmbeddingProvider {
     const apiKey = this.requireApiKey();
 
     try {
-      const response = await axios.post<GeminiBatchResponse>(
-        `${this.endpoint}/v1beta/models/${this.model}:batchEmbedContents`,
+      const response = await this.postBatch(
         {
           requests: texts.map((text) => ({
             model: `models/${this.model}`,
@@ -98,13 +146,7 @@ export class GeminiEmbeddingProvider implements EmbeddingProvider {
             outputDimensionality: this.dimensions,
           })),
         },
-        {
-          timeout: 120_000,
-          headers: {
-            "Content-Type": "application/json",
-            "x-goog-api-key": apiKey,
-          },
-        }
+        apiKey
       );
 
       const rows = response.data.embeddings;

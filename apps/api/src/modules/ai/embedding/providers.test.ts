@@ -11,6 +11,7 @@ import {
   fixtureKeyOf,
   resetEmbeddingProvider,
 } from "./index.js";
+import { GeminiEmbeddingProvider } from "./gemini.provider.js";
 import type { EmbeddingSettings } from "./settings.js";
 import {
   EmbeddingConfigError,
@@ -327,11 +328,13 @@ type GeminiRequest = {
  * a POST to `:batchEmbedContents`, the health probe is a GET of `/v1beta/models`.
  */
 async function startGeminiServer(options: {
-  batchStatus?: number;
+  /** One status, or a sequence consumed per batch call (the last repeats). */
+  batchStatus?: number | number[];
   batch?: unknown;
   models?: unknown;
 }): Promise<{ url: string; requests: GeminiRequest[]; close: () => void }> {
   const requests: GeminiRequest[] = [];
+  let batchCalls = 0;
 
   const server = http.createServer((request, response) => {
     let raw = "";
@@ -347,7 +350,15 @@ async function startGeminiServer(options: {
       });
 
       const isBatch = (request.url ?? "").includes(":batchEmbedContents");
-      response.writeHead(isBatch ? options.batchStatus ?? 200 : 200, {
+      const configured = options.batchStatus ?? 200;
+      const status = Array.isArray(configured)
+        ? configured[Math.min(batchCalls, configured.length - 1)]!
+        : configured;
+      if (isBatch) {
+        batchCalls += 1;
+      }
+
+      response.writeHead(isBatch ? status : 200, {
         "Content-Type": "application/json",
       });
       response.end(
@@ -455,8 +466,10 @@ test("Gemini rate limiting and a missing model are distinct failures", async () 
   const limited = await startGeminiServer({ batchStatus: 429, batch: {} });
 
   try {
-    const provider = createEmbeddingProvider(
-      geminiSettings({ baseUrl: limited.url, dimensions: 2 })
+    // No backoff entries: this asserts the exhausted path without sleeping.
+    const provider = new GeminiEmbeddingProvider(
+      geminiSettings({ baseUrl: limited.url, dimensions: 2 }),
+      []
     );
 
     await assert.rejects(
@@ -482,6 +495,27 @@ test("Gemini rate limiting and a missing model are distinct failures", async () 
     );
   } finally {
     missing.close();
+  }
+});
+
+test("a per-minute Gemini rate limit is retried, not failed", async () => {
+  const server = await startGeminiServer({
+    batchStatus: [429, 200],
+    batch: { embeddings: [{ values: [1, 0] }] },
+  });
+
+  try {
+    const provider = new GeminiEmbeddingProvider(
+      geminiSettings({ baseUrl: server.url, dimensions: 2 }),
+      [0]
+    );
+
+    const batch = await provider.embed(["first"]);
+
+    assert.deepEqual(batch.embeddings, [[1, 0]]);
+    assert.equal(server.requests.length, 2, "the retry must repeat the batch call");
+  } finally {
+    server.close();
   }
 });
 
