@@ -146,6 +146,27 @@ logs. The script ends with a verification summary — row counts, the operations
 overview and a search that should return hits — and exits non-zero when one of
 those checks fails, so it can gate CI as well as fill a demo.
 
+## Privacy and data handling
+
+Generation — `/ai/ask`, investigation analysis and follow-up answers — sends the
+question and the evidence excerpts to the configured LLM. The default is the
+**Gemini API free tier**, which Google treats as an "Unpaid Service": it may use
+inputs and outputs to improve its products, and human reviewers may read them.
+Treat a public demo as public: do not paste credentials, customer data or
+production logs into it. Set `LLM_PROVIDER` / `LLM_MODEL` to point generation at a
+provider you are happy with; `/ai/health` reports which one will answer.
+
+Embeddings are separate, and the public demo runs `EMBEDDING_PROVIDER=fixture`:
+search replays vectors recorded from the seeded corpus, so no upload is embedded
+by any provider. Ingesting a new document needs a real embedder (`ollama` or
+`openai-compatible`), and that backend sees every chunk it embeds — see
+[embedding providers](#embedding-providers) and
+[the deployment notes](docs/deployment.md#41-data-handling-what-leaves-the-deployment).
+
+No prompt or response text is logged: `aiMetrics` records counts, lengths, model
+and timings only. Keys live in `.env`, never in the web bundle or a committed
+file.
+
 ## Deploying
 
 [`docs/deployment.md`](docs/deployment.md) covers a **$0** deployment: one

@@ -107,6 +107,7 @@ the values that matter:
 | `TRUST_PROXY` | yes (behind a router) | `1` | Without it the rate limiters key every client on the proxy's IP |
 | `EMBEDDING_PROVIDER` | yes | `fixture`, `openai-compatible` or `ollama` | See §5 |
 | `GEMINI_API_KEY` | for analysis | your own key | `/ai/ask`, investigation analysis and follow-ups |
+| `LLM_MODEL` | no | `gemini-3.5-flash-lite` | The measured default (`docs/phase-5.5-decision.md`); `GEMINI_MODEL` is the older alias |
 | `ENABLE_DEV_ENDPOINTS` | no | `false` | `/ai/test-*` stay dark |
 | `HEALTH_DETAIL` | no | `false` | `true` adds dependency errors to `/ready` |
 | `DB_POOL_MAX` | no | `5` on a 512 MB host | Neon caps connections; a smaller pool is safer |
@@ -114,6 +115,24 @@ the values that matter:
 
 `PORT` defaults to 3000. The web build needs `VITE_API_URL` **at build time** —
 it is inlined by Vite, so changing the API URL means rebuilding the web image.
+
+### 4.1 Data handling — what leaves the deployment
+
+| Path | Leaves the deployment | Terms to accept |
+|---|---|---|
+| Generation (`/ai/ask`, analysis, follow-ups) | the question and up to 12 evidence excerpts (≤ 1 200 chars each) | **The Gemini free tier is an "Unpaid Service"**: Google may use inputs and outputs to improve its products, and reviewers may read them. The paid tier does not. |
+| Embeddings, `fixture` (**public demo default**) | nothing | the vectors are recorded in the repository |
+| Embeddings, `ollama` or a self-hosted `openai-compatible` | nothing off the machine | your own |
+| Embeddings, hosted `openai-compatible` | every chunk, at ingest and at search | that provider's terms — verify before ingesting anything private |
+| Logs and metrics | no prompt or response text | `aiMetrics` records counts, lengths, model and timing |
+
+Publish one sentence wherever the demo is announced: *"This demo sends questions and evidence excerpts to Google's
+Gemini API on the free tier, which may use them to improve its products — do not paste real credentials or
+customer data."*
+
+The $0 demo therefore runs `EMBEDDING_PROVIDER=fixture`: the seeded corpus is searchable and an upload is never
+embedded by anyone. Ingesting a new document needs `ollama` or a hosted embedder. Leaving `GEMINI_API_KEY` unset
+keeps search working and makes generation fail with a provider error instead of inventing an answer.
 
 ---
 

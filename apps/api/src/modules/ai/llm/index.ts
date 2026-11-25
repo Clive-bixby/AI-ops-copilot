@@ -23,7 +23,7 @@ export type { LlmProviderSettings, LlmSettings } from "./settings.js";
  */
 export type LlmFeature = "rag" | "analysis";
 
-const DEFAULT_GEMINI_MODEL = "gemini-2.5-flash-lite";
+const DEFAULT_GEMINI_MODEL = "gemini-3.5-flash-lite";
 const DEFAULT_TIMEOUT_MS = 60_000;
 const DEFAULT_MAX_RETRIES = 2;
 const DEFAULT_RETRY_BASE_DELAY_MS = 500;
@@ -148,7 +148,8 @@ function readFallback(): LlmProviderSettings | null {
  * embedding settings do.
  *
  * Model precedence: `<FEATURE>_LLM_MODEL` > `LLM_MODEL` > `GEMINI_MODEL` >
- * `gemini-2.5-flash-lite`. With nothing set, this is the previous behaviour.
+ * `gemini-3.5-flash-lite`, the model chosen in `docs/phase-5.5-decision.md`
+ * (20/24 cases measured: fact coverage 0.900, latency 3.3 s, refusal 3 of 5).
  */
 export function readLlmSettings(feature?: LlmFeature): LlmSettings {
   const provider = parseProvider(trimmed(process.env.LLM_PROVIDER), "LLM_PROVIDER");
