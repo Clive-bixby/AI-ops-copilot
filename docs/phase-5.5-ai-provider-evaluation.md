@@ -515,6 +515,28 @@ a fact, and put hallucination back to 0.042 with insufficiency decisions at 3 of
 line that buys no completeness and costs the safety number is not a trade worth making, so the `gate4` wording
 ships and the remaining gap is recorded rather than tuned away.
 
+#### 6.2.2 The uncited-hypothesis guard
+
+A live analysis through the api container settled whether the prompt fix holds in production: it does not, on
+flash-lite. With a copy brief as the only linked evidence (verified present in `investigation_evidence`, prompt
+2 355 chars including the gate), three runs stored `insufficient_evidence: false` with two and three hypotheses
+respectively, every one with an empty support set, built from the investigation's own description; the third run
+was a 429. So the invariant the prompt asks for is now enforced in code:
+`applyEvidenceSupportRule` empties the hypotheses and sets `insufficient_evidence` when no hypothesis cites any
+evidence **and** every linked item is `weak` (or nothing is linked). It runs in `analysis.service.ts` after
+parsing, and the harness applies the same rule on replay so the change is measurable without a provider call:
+
+| Cache | Before | After the guard |
+| --- | --- | --- |
+| flash-lite, 20 cases | hallucination 0.050, refusal 0.667, `l8` flagged | **0.000, 1.000, `l8` ok** |
+| qwen gate4, 24 cases | 0.000 / facts 0.722 | unchanged |
+| qwen pre-gate, 24 cases | 0.083, refusal 0.500, `l8` flagged | unchanged |
+
+The last row is the guard's limit as much as the first is its value: that older `l8` answer cited `E2` — the copy
+brief itself — as its support, so a rule about *uncited* claims cannot touch it. Removing claims that rest on
+nothing is mechanical; recognising that a claim rests on unrelated evidence is the relevance judgement no parser
+has, and it needs a model that follows the gate or a retrieval signal that never offered the item.
+
 `gemini-2.5-flash-lite`'s cached 20 answers were re-scored after the change and are unchanged (`l8` still
 flagged), which is what re-scoring a cache must show: the fix changes what the model is asked, so it can only be
 proven by asking again — blocked by the 20/day quota.

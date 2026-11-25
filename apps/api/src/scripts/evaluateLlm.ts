@@ -499,6 +499,9 @@ async function main(): Promise<number> {
       testCase: effectiveCase(item),
       raw: recordings[index]!.text,
       evidenceIds: item.evidenceIds,
+      // The production path applies this rule after parsing, so a replay that
+      // omitted the grading would score the parser alone.
+      evidenceRelevance: item.testCase.evidence.map((entry) => entry.relevance),
     })
   );
 

@@ -211,6 +211,41 @@ export function buildAnalysisPrompt(input: {
   return { prompt, evidenceIds };
 }
 
+/**
+ * Drop hypotheses that rest on nothing when the linked evidence is weak.
+ *
+ * A prompt can ask for a relevance decision, and a model can still answer from
+ * the investigation's own wording: a live run on a linked copy brief stored two
+ * hypotheses that cited no evidence at all. The parser cannot see relevance, so
+ * the rule is applied where the evidence is known -- and skipped entirely when it
+ * is not, so replaying an old recording still measures what was said.
+ *
+ * Only uncited hypotheses on weak-or-absent evidence are affected: a cause that
+ * cites evidence, or that was reasoned from direct/historical/related evidence,
+ * is left exactly as the model wrote it.
+ */
+export function applyEvidenceSupportRule(
+  analysis: ParsedAnalysis,
+  evidence: { relevance: string }[]
+): { analysis: ParsedAnalysis; unsupported: number } {
+  if (analysis.hypotheses.length === 0) {
+    return { analysis, unsupported: 0 };
+  }
+
+  if (analysis.hypotheses.some((item) => item.supports.length > 0)) {
+    return { analysis, unsupported: 0 };
+  }
+
+  if (evidence.some((item) => item.relevance !== "weak")) {
+    return { analysis, unsupported: 0 };
+  }
+
+  return {
+    analysis: { ...analysis, insufficientEvidence: true, hypotheses: [] },
+    unsupported: analysis.hypotheses.length,
+  };
+}
+
 function stripCodeFence(raw: string): string {
   const trimmed = raw.trim();
   if (!trimmed.startsWith("```")) {

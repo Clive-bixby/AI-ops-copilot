@@ -1,5 +1,6 @@
 import {
   ANALYSIS_LIMITS,
+  applyEvidenceSupportRule,
   parseAnalysisResponse,
 } from "../modules/investigations/analysisPolicy.js";
 import {
@@ -207,6 +208,11 @@ export function scoreCase(input: {
   testCase: CaseDefinition;
   raw: string;
   evidenceIds: string[];
+  /**
+   * The relevance each prompt label carried. Omitted means "unknown", and the
+   * evidence-support rule is then skipped so a fixture measures the parser alone.
+   */
+  evidenceRelevance?: string[];
 }): ScoredCase {
   const { testCase, raw, evidenceIds } = input;
   const text = raw.trim();
@@ -220,10 +226,17 @@ export function scoreCase(input: {
   if (testCase.kind === "analysis") {
     try {
       const result = parseAnalysisResponse(raw, evidenceIds);
+      const analysis =
+        input.evidenceRelevance === undefined
+          ? result.analysis
+          : applyEvidenceSupportRule(
+              result.analysis,
+              input.evidenceRelevance.map((relevance) => ({ relevance }))
+            ).analysis;
       parsed = true;
-      schemaValid = result.analysis.summary.length > 0;
+      schemaValid = analysis.summary.length > 0;
       droppedCitations = result.droppedCitations;
-      refused = result.analysis.insufficientEvidence;
+      refused = analysis.insufficientEvidence;
     } catch {
       parsed = false;
     }

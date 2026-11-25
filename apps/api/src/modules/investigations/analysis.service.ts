@@ -17,6 +17,7 @@ import {
   parseAnalysisResponse,
   statementHash,
   validateHypothesisUpdate,
+  applyEvidenceSupportRule,
 } from "./analysisPolicy.js";
 import type { ParsedAnalysis } from "./analysisPolicy.js";
 import {
@@ -574,6 +575,8 @@ export async function analyzeInvestigation(input: {
     throw new RAGProviderError(reason);
   }
 
+  const guarded = applyEvidenceSupportRule(parsed.analysis, evidence);
+
   try {
     await persistSuccess({
       organizationId: input.organizationId,
@@ -581,7 +584,7 @@ export async function analyzeInvestigation(input: {
       analysisId,
       userId: input.userId,
       evidenceIds: prompt.evidenceIds,
-      parsed: parsed.analysis,
+      parsed: guarded.analysis,
       provider: generated.provider,
       model: generated.model,
       generationMs: generated.generationMs,

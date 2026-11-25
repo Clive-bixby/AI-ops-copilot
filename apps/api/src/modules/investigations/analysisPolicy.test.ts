@@ -5,6 +5,7 @@ import {
   ANALYSIS_LIMITS,
   AnalysisFormatError,
   buildAnalysisPrompt,
+  applyEvidenceSupportRule,
   parseAnalysisResponse,
   statementHash,
   validateHypothesisUpdate,
@@ -199,6 +200,67 @@ describe("parseAnalysisResponse", () => {
     assert.deepEqual(parsed.analysis.nextSteps, [
       "Link the API logs for the incident window.",
     ]);
+  });
+});
+
+describe("applyEvidenceSupportRule", () => {
+  const ids = ["evidence-1", "evidence-2"];
+  const weak = [{ relevance: "weak" }, { relevance: "weak" }];
+
+  it("drops uncited hypotheses when every linked item is weak evidence", () => {
+    // The live flash-lite run: a copy brief was the only evidence, and the model
+    // stored two causes that cited nothing.
+    const parsed = parseAnalysisResponse(
+      JSON.stringify({
+        summary: "Latency rose after the last release.",
+        hypotheses: [
+          hypothesis({ statement: "The release caused it.", supports: [] }),
+          hypothesis({ statement: "A dependency caused it.", supports: [] }),
+        ],
+      }),
+      ids
+    );
+
+    const guarded = applyEvidenceSupportRule(parsed.analysis, weak);
+
+    assert.equal(guarded.unsupported, 2);
+    assert.equal(guarded.analysis.insufficientEvidence, true);
+    assert.deepEqual(guarded.analysis.hypotheses, []);
+  });
+
+  it("keeps an uncited hypothesis when the evidence is more than weak", () => {
+    // l7's shape: the cause is real and only the citation was forgotten.
+    const parsed = parseAnalysisResponse(
+      JSON.stringify({
+        summary: "Gateway timeouts stalled checkouts.",
+        hypotheses: [hypothesis({ statement: "The gateway client must be restarted." })],
+      }),
+      ids
+    );
+
+    const guarded = applyEvidenceSupportRule(parsed.analysis, [
+      { relevance: "direct" },
+      { relevance: "weak" },
+    ]);
+
+    assert.equal(guarded.unsupported, 0);
+    assert.equal(guarded.analysis.hypotheses.length, 1);
+  });
+
+  it("keeps a hypothesis that cites weak evidence", () => {
+    const parsed = parseAnalysisResponse(
+      JSON.stringify({
+        summary: "The linked brief is the only context.",
+        hypotheses: [hypothesis({ statement: "The brief is stale.", supports: ["E1"] })],
+      }),
+      ids
+    );
+
+    const guarded = applyEvidenceSupportRule(parsed.analysis, weak);
+
+    assert.equal(guarded.unsupported, 0);
+    assert.equal(guarded.analysis.insufficientEvidence, false);
+    assert.deepEqual(guarded.analysis.hypotheses[0]?.supports, [ids[0]]);
   });
 });
 
