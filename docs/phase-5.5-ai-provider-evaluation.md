@@ -499,6 +499,26 @@ one call in the standard run needed it (two waits, 40.9 s total); the hard run a
 clean. **The `Avg ms` column for that run (1585 ms hybrid) includes that wait and is not provider latency** —
 use the p50/p90 above. A retry test was added (`429` then `200` → one repeated call), 292/292 tests pass.
 
+**The M6 gate fails with Gemini, and that is a finding, not a setup problem.** The deterministic investigation
+harness — no language model, hybrid retrieval, the same corpus it uses for nomic — run with
+`EMBEDDING_PROVIDER=gemini`:
+
+```
+cases 5 · positiveCases 4 · recall 1.00 · precision 0.875 · gradingAccuracy 1.00
+selected 13 · extras 2 · duplicateViolations 0 · forbiddenHits 0
+emptyCaseViolations 0 · windowFailures 0 · manualLinks 1 · meanLatencyMs 632
+Thresholds: FAIL — precision 88% < 90%
+```
+
+Against nomic's `selected 11 · extras 0 · precision 1.00 · meanLatencyMs 138` (§6.1). Both extras are
+`related`-grade window documents, one in `pool-exhaustion` (`doc-window-inside`) and one in `redis-eviction`
+(`doc-window-before`); recall and grading are unchanged, so nothing relevant is lost and no wrong grade is
+assigned — the embedder just admits two more marginal "related" sources at the `0.65` floor. It is also ~4.5×
+slower per investigation because every evidence query is now a network round trip (≈450 ms) instead of a local
+one. This matters for M7: `gemini-embedding-001` is **not** a drop-in swap while related-grade admission is
+this loose, and whether a higher floor removes those two extras without dropping any found item is a
+calibration question for M8 — the threshold was not tuned here to make a gate go green.
+
 Cost of the sweep, for the record: 232 embedding requests total (two runs × 116), ≈ 44 chunks ≈ 15 K tokens
 of corpus per run plus 72 short queries. The corpus is smaller than the ≈ 210-chunk / 60 K-token figure §5.1
 assumed: one chunk per labelled source, which is why the request count — not the token count — is the binding
@@ -1163,7 +1183,7 @@ Each milestone is independently testable and independently revertible. **No mile
 | **M3** | ⏳ **Partial.** Two sweeps recorded: `qwen2.5:3b-instruct` (local Ollama, 24/24) and `gemini-2.5-flash-lite` (free tier, 20/24 — its 20/day quota). Ten flagged responses read and classified; four instrument defects found and fixed; the `l8` unrelated-evidence failure fixed in both prompts (24 local cases: hallucination 0.000, every insufficiency decision correct, fact coverage 0.722 — §6.2.1). A current model is now measured (`gemini-3.5-flash-lite`, 20 cases, §6.2.3) and the live guard check is confirmed (§6.2.2). **Remaining:** the four `gemini-2.5-flash-lite` cases (its quota was still spent on 2026-11-25) and Groq (needs a key) | §6.2 filled in with measured numbers; `review.md` per run | Every remaining flag traced to the model, not the scorer; re-scoring the same cache is byte-identical | 20 Gemini requests (`gemini-3.5-flash-lite`) + 4 local |
 | **M4** | ✅ **Done.** Embedding provider `gemini`: `batchEmbedContents`, `outputDimensionality 768`, task roles (document/query), unit-normalise, quota-free `probe()`; `EmbeddingProvider.embed()` took an optional role and the query paths (`retrieval.service`, `/ai/test-search`) now pass `"query"` | `embedding/gemini.provider.ts`; `/ai/health` reports `gemini` | 8 mocked-HTTP unit tests in `providers.test.ts` (no network); `npm run typecheck` clean; `npm test` 291/291; live `probe()` and one 768-d document embedding (norm 1.000) | 2 calls |
 | **M5** | ✅ **Done.** Harness upgrade: `--provider/--model` (own ephemeral organization per embedder), `--queries hard` (12 held-out queries), per-source-type recall@10, top-hit similarity p10/p50/p90, `--json <path>` | `eval:retrieval` flags + `hardEvaluationQueries` | Re-run of the 36-query baseline reproduces §5.1 recall/precision/MRR exactly; the one nDCG delta is recorded in §5.2.1 and traced to RRF tie ordering, not to this change | 0 (local) |
-| **M6** | ✅ **Done.** Embedding comparison, nomic vs `gemini-embedding-001`, both query sets (§5.3). Gemini wins the vector arm everywhere (standard R@10 0.8796 → 0.9537, hard 0.5139 → 0.7500) and the hard hybrid (0.9028 → 0.9306); standard hybrid is at ceiling (0.9907 both). A run trips the free-tier per-minute cap, so the Gemini provider now retries a 429 three times before failing | §5.3 filled in with measured recall/MRR/nDCG, per-type recall, similarity p10/p50/p90, latency and ingestion throughput | 232 live embedding requests; `npm run typecheck` clean; `npm test` 292/292 (new retry test); both payloads re-read from `.eval/*.json` | ~232 requests, ≈ 30 K tokens |
+| **M6** | ✅ **Done.** Embedding comparison, nomic vs `gemini-embedding-001`, both query sets (§5.3). Gemini wins the vector arm everywhere (standard R@10 0.8796 → 0.9537, hard 0.5139 → 0.7500) and the hard hybrid (0.9028 → 0.9306); standard hybrid is at ceiling (0.9907 both). A run trips the free-tier per-minute cap, so the Gemini provider now retries a 429 three times before failing | §5.3 filled in with measured recall/MRR/nDCG, per-type recall, similarity p10/p50/p90, latency and ingestion throughput | 232 live embedding requests; both retrieval payloads read back from `.eval/*.json`; **`eval:investigations` FAILS with gemini** (precision 0.875 < 0.90, 2 related-grade extras, recorded above rather than tuned away); `npm run typecheck` clean; `npm test` 292/292 (new retry test) | ~232 requests, ≈ 30 K tokens |
 | **M7** | Decision record: final LLM + embedding choice with numbers; explicit accept/reject for each risk | `docs/phase-5.5-decision.md` | reviewed with you | 0 |
 | **M8** | **Only if M7 approves an embedding switch:** backup table, resumable backfill script (`--dry-run`), threshold recalibration, fixture re-record, `REINDEX CONCURRENTLY` | migration scripts + runbook | `eval:investigations` PASS; `eval:retrieval` no regression; rollback rehearsed on a scratch org | corpus tokens |
 | **M9** | Deployment wiring: `fixture` stays the public-demo default until M8 verified; document the privacy notice for unpaid tiers | README + `docs/deployment.md` updates | local end-to-end demo | small |
