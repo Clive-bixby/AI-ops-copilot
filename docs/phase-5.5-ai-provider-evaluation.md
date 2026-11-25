@@ -692,8 +692,10 @@ brief itself — as its support, so a rule about *uncited* claims cannot touch i
 nothing is mechanical; recognising that a claim rests on unrelated evidence is the relevance judgement no parser
 has, and it needs a model that follows the gate or a retrieval signal that never offered the item.
 
-`gemini-2.5-flash-lite`'s cached 20 answers were re-scored after the change and are unchanged (`l8` still
-flagged), which is what re-scoring a cache must show: the fix changes what the model is asked, so it can only be
+`gemini-2.5-flash-lite`'s cached 20 answers re-scored after the change read 0.000 hallucination and refusal 1.000 —
+but that is the guard's work, not the model's: its cached `l8` answer set `insufficient_evidence: false` and stated
+a cause with `supports: []`, and `applyEvidenceSupportRule` empties exactly that. The model still fails the case;
+its score no longer shows it. This is what re-scoring a cache must show: the fix changes what the model is asked, so it can only be
 proven by asking again — blocked by the 20/day quota.
 
 **Live confirmation, 2026-11-25.** The re-run that was rate-limited above has now been done. On investigation
@@ -1214,7 +1216,7 @@ Each milestone is independently testable and independently revertible. **No mile
 | **M6** | ✅ **Done.** Embedding comparison, nomic vs `gemini-embedding-001`, both query sets (§5.3). Gemini wins the vector arm everywhere (standard R@10 0.8796 → 0.9537, hard 0.5139 → 0.7500) and the hard hybrid (0.9028 → 0.9306); standard hybrid is at ceiling (0.9907 both). A run trips the free-tier per-minute cap, so the Gemini provider now retries a 429 three times before failing | §5.3 filled in with measured recall/MRR/nDCG, per-type recall, similarity p10/p50/p90, latency and ingestion throughput | 232 live embedding requests; both retrieval payloads read back from `.eval/*.json`; **`eval:investigations` FAILS with gemini** (precision 0.875 < 0.90, 2 related-grade extras at similarity 0.75/0.71 — `--breakdown` shows no threshold separates them from the found items, so the cause is the model, not the floor); `npm run typecheck` clean; `npm test` 292/292 (new retry test) | ~232 requests, ≈ 30 K tokens |
 | **M7** | ✅ **Done, awaiting your review.** Decision record: `gemini-3.5-flash-lite` for every generation path (fallback still disabled), **no embedding switch** — nomic stays the default and **M8 is not approved**, thresholds untouched — plus accept/reject for R1–R12 and the open items | `docs/phase-5.5-decision.md` | every number traced to §5.3/§6.2; the gate failure that decides D3 is recorded, not tuned away | 0 |
 | **M8** | **Only if M7 approves an embedding switch:** backup table, resumable backfill script (`--dry-run`), threshold recalibration, fixture re-record, `REINDEX CONCURRENTLY` | migration scripts + runbook | `eval:investigations` PASS; `eval:retrieval` no regression; rollback rehearsed on a scratch org | corpus tokens |
-| **M9** | Deployment wiring: `fixture` stays the public-demo default until M8 verified; document the privacy notice for unpaid tiers | README + `docs/deployment.md` updates | local end-to-end demo | small |
+| **M9** | ✅ **Done, except the live demo run.** `fixture` remains the public-demo embedding default (M8 not approved); `LLM_MODEL` / `GEMINI_MODEL` now default to the chosen `gemini-3.5-flash-lite`; README and `docs/deployment.md` §4.1 state what leaves the deployment, the free tier's terms and the sentence to publish | README, `docs/deployment.md`, both `.env.example` files, `llm/index.ts` default | `npm run typecheck` clean; `npm test` 292/292; `readLlmSettings()` returns `gemini-3.5-flash-lite` for both features with no override set. The container rebuild and `/ai/health` check are **blocked**: Docker Desktop's daemon stopped mid-session, so the stack is down | 0 |
 
 Sequencing rationale: **measure before choosing** (M2/M3 before M7), **client before providers** (M1 so the
 comparison runs through production code, not a bespoke script), **embeddings last** because that is the only

@@ -8,7 +8,7 @@ commands in `docs/phase-5.5-ai-provider-evaluation.md` (cited as §5.3, §6.2, �
 
 | # | Decision | Basis |
 | --- | --- | --- |
-| D1 | **Generation: `gemini-3.5-flash-lite` for `/ai/ask`, investigation analysis and follow-ups** (`LLM_MODEL`, `RAG_LLM_MODEL`, `ANALYSIS_LLM_MODEL`). The deterministic evidence-support guard stays on. | §6.2.3: best measured fact coverage (0.900) and fastest mean latency (3.3 s), schema valid 1.000, citation precision 1.000, 0 invented numbers. Its two defects are recorded, not hidden (§3). |
+| D1 | **Generation: `gemini-3.5-flash-lite` for `/ai/ask`, investigation analysis and follow-ups** (challenged by the 2.5 refusal column and re-checked in §2.1 — it stands) (`LLM_MODEL`, `RAG_LLM_MODEL`, `ANALYSIS_LLM_MODEL`). The deterministic evidence-support guard stays on. | §6.2.3: best measured fact coverage (0.900) and fastest mean latency (3.3 s), schema valid 1.000, citation precision 1.000, 0 invented numbers. Its two defects are recorded, not hidden (§3). |
 | D2 | **Fallback stays disabled** (`LLM_FALLBACK_ENABLED=false`) until Groq is measured. | No Groq key; §6.2 measured nothing for it. A fallback with no quality evidence is a second unknown, not a safety net. |
 | D3 | **Embeddings: no switch. `nomic-embed-text` (local Ollama) stays the default**; `gemini-embedding-001` remains an implemented, selectable provider but is **not** the default and is **not** approved for the public demo. | §5.3: gemini wins the vector arm (standard 0.880 → 0.954, hard 0.514 → 0.750) **but fails the investigation gate** — precision 0.875 < 0.90, and the two extras score 0.75 / 0.71, exactly what the sources that belong scored, so no threshold separates them. It is also ~4.5× slower per investigation and sends every chunk to an unpaid tier that may train on it. |
 | D4 | **M8 (embedding migration) is not approved.** No backup table, no backfill, no re-index, no threshold recalibration. | There is nothing worth migrating *to* yet. D3 is a decision against the switch, not a postponement for scheduling reasons. |
@@ -48,9 +48,42 @@ table cannot see that — which is why the deterministic gate exists.
 | invented numbers | 0 | 0 | 0 |
 
 `gemini-2.5-flash-lite`'s refusal column is better, but those answers were recorded before the gate wording
-shipped and it is the older model id; `gemini-3.5-flash-lite` is the current catalogue entry, is the most complete, and is the only one whose
-answers were scored after the guard existed. Choosing the older model for one column would trade a measured
-strength for an unmeasured one.
+shipped and it is the older model id; `gemini-3.5-flash-lite` is the current catalogue entry, is the most complete,
+and is the only one whose answers were scored after the guard existed. Choosing the older model for one column
+would trade a measured strength for an unmeasured one.
+
+### 2.1 Challenging D1: is `gemini-3.5-flash-lite` really the better default?
+
+The case against it is real: `gemini-2.5-flash-lite` shows refusal accuracy 1.000 and hallucination 0.000 against
+3.5's 0.600 and 0.150. Both caches were re-scored with today's harness (`--replay … --limit 20`, no network), so
+the two columns are computed by the same code, and the objection deserved an answer measured rather than argued.
+
+| 20 cases, today's scorer | 2.5-flash-lite | 3.5-flash-lite |
+| --- | --- | --- |
+| fact coverage | 0.850 | **0.900** |
+| hallucination rate | **0.000** | 0.150 (3 cases) |
+| refusal accuracy | **1.000** | 0.600 (3 of 5) |
+| latency mean / p95 | 3.9 s / 22.4 s | **3.3 s / 14.3 s** |
+| answers flagged | **0** | 3 |
+
+The perfect refusal column does not survive reading the answer it comes from. On `l8` — the one case written to
+test whether a model will explain an incident from irrelevant evidence — `gemini-2.5-flash-lite` answered
+`insufficient_evidence: false` and **invented a cause** ("the recent release introduced a change that caused an
+excessive number of client connections") with `supports: []`. It scores as a correct refusal only because
+`applyEvidenceSupportRule` erases an uncited hypothesis set and flips the flag: **the guard refused, the model did
+not.** `gemini-3.5-flash-lite` on the same case returned `insufficient_evidence: true` and no hypotheses by
+itself, and is flagged only because its `next_steps` names "database connection metrics", a subsystem the linked
+evidence never mentions.
+
+That inverts the reading of the two columns. On the judgement this project actually cares about — recognising
+that unrelated evidence cannot support a cause — the newer model is the only cloud model measured so far that
+does it unaided, and the older one's safety score is an artefact of the code that cleans up after it. The
+remaining cost of D1 is unchanged and stated in §3: two grounded follow-ups are over-refused.
+
+**Revisit rule.** If `gemini-2.5-flash-lite` is ever re-recorded on the shipped prompt (its 20/day quota blocked
+that) and refuses `l8` itself — `insufficient_evidence: true`, empty hypotheses, no uncited cause — while keeping
+facts ≥ 0.85, it becomes the default: one environment variable, no migration. Until then D1 stands, and no
+column in this document is allowed to carry a score whose explanation is "the guard did it".
 
 ## 3. What we are accepting by choosing `gemini-3.5-flash-lite`
 
