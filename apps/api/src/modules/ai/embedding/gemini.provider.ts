@@ -102,10 +102,10 @@ export class GeminiEmbeddingProvider implements EmbeddingProvider {
   private async postBatch(
     body: unknown,
     apiKey: string
-  ): Promise<{ data: GeminiBatchResponse }> {
+  ): Promise<GeminiBatchResponse> {
     for (let attempt = 0; ; attempt += 1) {
       try {
-        return await axios.post<GeminiBatchResponse>(
+        const response = await axios.post<GeminiBatchResponse>(
           `${this.endpoint}/v1beta/models/${this.model}:batchEmbedContents`,
           body,
           {
@@ -116,6 +116,7 @@ export class GeminiEmbeddingProvider implements EmbeddingProvider {
             },
           }
         );
+        return response.data;
       } catch (error) {
         const delay = this.backoffMs[attempt];
         const limited =
@@ -137,7 +138,7 @@ export class GeminiEmbeddingProvider implements EmbeddingProvider {
     const apiKey = this.requireApiKey();
 
     try {
-      const response = await this.postBatch(
+      const { embeddings: rows } = await this.postBatch(
         {
           requests: texts.map((text) => ({
             model: `models/${this.model}`,
@@ -148,8 +149,6 @@ export class GeminiEmbeddingProvider implements EmbeddingProvider {
         },
         apiKey
       );
-
-      const rows = response.data.embeddings;
 
       if (!Array.isArray(rows) || rows.length === 0) {
         throw new EmbeddingModelError(
