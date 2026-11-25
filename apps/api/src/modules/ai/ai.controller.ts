@@ -52,7 +52,7 @@ export const testEmbeddingController = asyncHandler(async (req, res) => {
  * it. The endpoint used to report embeddings only, so a deployment could look
  * healthy while every analysis pointed at a model that had since been retired.
  */
-function describeGeneration() {
+export function describeGeneration() {
   try {
     const settings = readLlmSettings();
 

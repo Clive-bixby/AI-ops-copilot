@@ -167,6 +167,13 @@ Two rules that are not negotiable:
   How do I restore the production database from a backup?
   What causes Redis key evictions?
   ```
+
+  Re-record them after changing the demo corpus: `cd apps/api && npm run
+  embed:demo-fixtures` (add `-- --dry-run` to see what it would add). It reads the
+  seeded demo organization's chunks, embeds them plus the six questions with a
+  real embedder, and keeps every existing key, including CI's. Run it against a
+  seeded database; it refuses to run with `EMBEDDING_PROVIDER=fixture` and refuses
+  a provider whose model does not match the file's.
 - If a demo must accept arbitrary documents *and* arbitrary questions, it needs a
   real embedding API (`openai-compatible`) or a machine that runs Ollama. There is
   no third option that stays free and correct.

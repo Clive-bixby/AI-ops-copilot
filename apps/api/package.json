@@ -17,6 +17,7 @@
     "eval:retrieval": "tsx src/scripts/evaluateRetrieval.ts",
     "eval:investigations": "tsx src/scripts/evaluateInvestigations.ts",
     "embed:fixture": "tsx src/scripts/embeddingFixtureServer.ts",
+    "embed:demo-fixtures": "tsx src/scripts/recordDemoFixtures.ts",
     "eval:llm": "tsx src/scripts/evaluateLlm.ts"
   },
   "keywords": [],
