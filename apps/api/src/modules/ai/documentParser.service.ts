@@ -114,31 +114,22 @@ export async function parseDocument(filePath: string): Promise<string> {
 
   const extension = path.extname(normalizedPath).toLowerCase();
 
-  const textExtensions = new Set([
-    ".txt",
-    ".csv",
-    ".md",
-    ".json",
-    ".log",
-    ".tsv",
-  ]);
-
   try {
-    const text =
-      textExtensions.has(extension)
-        ? await readTextFile(normalizedPath)
-        : extension === ".pdf"
-          ? await readPdfFile(normalizedPath)
-          : "";
-
-    if (!text) {
+    if (!TEXT_UPLOAD_EXTENSIONS.has(extension) && extension !== ".pdf") {
       throw new DocumentParserError(
         "Unsupported document format. Supported formats: .txt, .csv, .md, .json, .log, .tsv, .pdf"
       );
     }
 
-    const trimmed = text.trim();
+    const text = TEXT_UPLOAD_EXTENSIONS.has(extension)
+      ? await readTextFile(normalizedPath)
+      : await readPdfFile(normalizedPath);
+
+    const trimmed = (text ?? "").trim();
     if (!trimmed) {
+      // A PDF that parses but yields no text lands here. It used to answer with
+      // the "unsupported format" sentence, which names a different problem and
+      // sends the user to the wrong fix.
       throw new DocumentParserError("Document did not contain extractable text");
     }
 

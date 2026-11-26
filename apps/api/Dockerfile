@@ -25,8 +25,16 @@ COPY src ./src
 COPY run-all.mjs ./
 
 # Uploaded originals are written here by multer and deleted once their text has
-# been extracted; docker-compose mounts a volume here.
-RUN mkdir -p /app/uploads
+# been extracted; docker-compose mounts a volume here. The directory is created
+# and handed to the runtime user before the volume mounts, because a named volume
+# is initialised from the image path and inherits its ownership.
+RUN mkdir -p /app/uploads && chown -R node:node /app/uploads
+
+# The image ships no build output and the process only needs to read its source
+# and write /app/uploads. Reusing the uid 1000 user that the base image already
+# has (and that apps/web also uses) avoids a useradd layer; it is deliberately
+# not a recursive chown, which would invalidate the cache on every source edit.
+USER node
 
 EXPOSE 3000
 

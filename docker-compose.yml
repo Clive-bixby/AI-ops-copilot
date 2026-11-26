@@ -30,7 +30,9 @@ services:
   redis:
     image: redis:7
     ports:
-      - "${REDIS_PORT:-6379}:6379"
+      # Loopback only: this Redis has no password, and publishing it on every
+      # interface exposes an unauthenticated queue to the local network.
+      - "127.0.0.1:${REDIS_PORT:-6379}:6379"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s

@@ -3,6 +3,7 @@ import "../config/env.js";
 import { Pool, types } from "pg";
 
 import { envInt } from "../config/env.js";
+import { resolveSsl } from "./databaseSsl.js";
 import { logger } from "./logger.js";
 
 // The schema uses TIMESTAMP WITHOUT TIME ZONE and stores UTC values. Parse
@@ -10,52 +11,26 @@ import { logger } from "./logger.js";
 types.setTypeParser(1114, (value: string) => new Date(`${value.replace(" ", "T")}Z`))
 
 /**
- * SSL used to be forced on for every connection, which made the API unable to
- * reach a plain local Postgres (the compose database included): the server
- * answers "The server does not support SSL connections" and the connection
- * fails before any query runs.
- *
- * Rules, in order:
- *   DATABASE_SSL=false   -> never use SSL
- *   DATABASE_SSL=true    -> always use SSL
- *   sslmode=disable      -> never use SSL
- *   sslmode=<anything>   -> use SSL
- *   loopback host        -> no SSL (local development)
- *   anything else        -> SSL, with certificate verification off
- *
- * Verification stays off for remote hosts because that was the previous
- * behaviour; turning it on is tracked as follow-up work.
+ * The TLS decision itself lives in `databaseSsl.ts`, where it has no pool and
+ * can be tested. `DATABASE_SSL_CA` turns certificate verification on; without
+ * it a remote connection stays encrypted but unverified, which is the previous
+ * behaviour and is not silently changed here.
  */
-function resolveSsl(connectionString: string | undefined) {
-  const explicit = process.env.DATABASE_SSL?.trim().toLowerCase()
+const ssl = resolveSsl({
+  connectionString: process.env.DATABASE_URL,
+  ssl: process.env.DATABASE_SSL,
+  caPath: process.env.DATABASE_SSL_CA,
+});
 
-  if (explicit === "false" || explicit === "0") return undefined
-  if (explicit === "true" || explicit === "1") return { rejectUnauthorized: false }
-
-  if (!connectionString) return undefined
-
-  let url: URL
-  try {
-    url = new URL(connectionString)
-  } catch {
-    return undefined
-  }
-
-  const sslmode = url.searchParams.get("sslmode")
-  if (sslmode === "disable") return undefined
-  if (sslmode) return { rejectUnauthorized: false }
-
-  const host = url.hostname
-  if (
-    host === "localhost" ||
-    host === "127.0.0.1" ||
-    host === "::1" ||
-    host === "[::1]"
-  ) {
-    return undefined
-  }
-
-  return { rejectUnauthorized: false }
+// One warning at startup, not one per query: an operator who sees this line has
+// a decision to make (supply the provider's CA), and a log that repeats it for
+// every connection is a log nobody reads. Loopback and DATABASE_SSL=false never
+// reach this branch, so local development stays silent.
+if (ssl !== undefined && ssl.rejectUnauthorized === false) {
+  logger.warn("db.tls_without_ca", {
+    message:
+      "The database connection uses TLS without certificate verification. Set DATABASE_SSL_CA to the provider's CA bundle to verify it.",
+  });
 }
 
 /**
@@ -69,7 +44,7 @@ function resolveSsl(connectionString: string | undefined) {
  */
 export const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
-  ssl: resolveSsl(process.env.DATABASE_URL),
+  ssl,
   max: envInt("DB_POOL_MAX", 10),
   connectionTimeoutMillis: envInt("DB_CONNECTION_TIMEOUT_MS", 5_000),
   idleTimeoutMillis: envInt("DB_IDLE_TIMEOUT_MS", 30_000),

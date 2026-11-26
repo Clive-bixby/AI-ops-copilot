@@ -6,3 +6,6 @@ node_modules/
 .DS_Store
 dist/
 dist-ssr/
+
+# Local database dumps (scripts/db-backup.mjs default output)
+backups/

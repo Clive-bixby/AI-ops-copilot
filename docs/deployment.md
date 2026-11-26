@@ -100,6 +100,7 @@ the values that matter:
 |---|---|---|---|
 | `DATABASE_URL` | yes | Neon pooled connection string | Must include `?sslmode=require` for a remote host |
 | `DATABASE_SSL` | no | leave unset | TLS is inferred: loopback off, remote on |
+| `DATABASE_SSL_CA` | recommended on a remote database | path to the provider's `ca.pem` | Without it TLS is encrypted but **unverified**: an attacker between the API and Postgres can present any certificate. Setting it turns verification on (`rejectUnauthorized: true`), and the API logs `db.tls_without_ca` once at startup while it is missing. `DATABASE_SSL=false` still wins |
 | `REDIS_URL` | yes | Upstash Redis URL (TLS: `rediss://`) | Ingestion queue; the API degrades without it |
 | `JWT_SECRET` | yes | `openssl rand -hex 32` | The compose default is a placeholder |
 | `JWT_EXPIRES_IN` | no | `1d` | The token cannot be revoked, so keep it short |
@@ -456,6 +457,7 @@ State these on the product itself rather than discovering them in a demo:
   list. Without it every client shares the proxy's IP, so one rate-limit bucket
   covers everyone. `TRUST_PROXY=true` is refused on purpose: it would trust a
   client-supplied `X-Forwarded-For` and let anyone skip the limiter.
+- `REDIS_URL` must be `rediss://` with the provider's token (Upstash embeds it in the URL), and its port must not be published. `docker-compose.yml` binds it to `127.0.0.1` for exactly this reason: an unauthenticated Redis reachable from a network is a queue anyone can drain or write to, and this one carries ingestion jobs.
 - `ENABLE_DEV_ENDPOINTS=false`. The `/ai/test-*` routes stay dark.
 - `HEALTH_DETAIL=false` unless you are debugging: the detail can name internal
   hosts and ports.

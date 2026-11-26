@@ -1,6 +1,7 @@
 import fs from "fs/promises";
 import path from "path";
 
+import { logger } from "../../core/logger.js";
 import { asyncHandler } from "../../utils/asyncHandler.js";
 import { createHttpError } from "../../utils/httpError.js";
 import { readListPagination } from "../../utils/pagination.js";
@@ -183,7 +184,7 @@ async function removeUploadedFileSafely(filePath: string): Promise<void> {
         : "";
 
     if (code !== "ENOENT") {
-      console.warn("Failed to delete uploaded file", { filePath, error });
+      logger.warn("documents.uploaded_file_delete_failed", { filePath, error });
     }
   }
 }
