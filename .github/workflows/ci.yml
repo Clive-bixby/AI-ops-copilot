@@ -154,7 +154,7 @@ jobs:
           fi
 
   web:
-    name: Web (typecheck, build)
+    name: Web (lint, tests, typecheck, build)
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -167,6 +167,11 @@ jobs:
           cache: npm
           cache-dependency-path: apps/web/package-lock.json
       - run: npm ci
+      # The suites render the real components in jsdom with a mocked `fetch`,
+      # so they need no browser, no API and no network. Build runs last because
+      # its `tsc -b` is the slowest step.
+      - run: npm run lint
+      - run: npm test
       - run: npm run build
 
   images:
