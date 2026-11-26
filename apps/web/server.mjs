@@ -1,5 +1,6 @@
+import { createHash } from "node:crypto";
 import { createReadStream } from "node:fs";
-import { stat } from "node:fs/promises";
+import { readFile, stat } from "node:fs/promises";
 import { createServer } from "node:http";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -46,6 +47,77 @@ const COMPRESSIBLE = /^(text\/|application\/(javascript|json|manifest\+json)|ima
 
 /** Only the hashed build output is safe to cache forever. */
 const IMMUTABLE_PREFIX = "/assets/";
+
+/**
+ * The API origin the bundle was built against.
+ *
+ * The CSP has to name it explicitly, so it is read from the same variable the
+ * build inlined (`VITE_API_URL`) and required to be an absolute origin: a
+ * malformed value would block every API call in the browser instead, and a
+ * silent fallback would hide the mismatch.
+ */
+function apiOriginFromEnv() {
+  const raw = (process.env.VITE_API_URL ?? "http://localhost:3000")
+    .trim()
+    .replace(/\/+$/, "");
+
+  try {
+    const parsed = new URL(raw);
+    if (parsed.protocol === "http:" || parsed.protocol === "https:") {
+      return parsed.origin;
+    }
+  } catch {
+    // Reported below with the value, so the operator can see what was set.
+  }
+
+  throw new Error(
+    `VITE_API_URL must be an absolute http(s) URL for the CSP connect-src (got "${raw}").`
+  );
+}
+
+/**
+ * SHA-256 of every inline script in the built shell.
+ *
+ * `index.html` boots the saved theme before React mounts. Its hash is computed
+ * from the built file instead of being hard-coded, so changing the snippet
+ * cannot leave the CSP pointing at the previous one. External scripts (the
+ * module bundle) stay covered by `'self'`.
+ */
+async function inlineScriptHashes() {
+  const html = await readFile(path.join(root, "index.html"), "utf8");
+  const hashes = [];
+
+  for (const match of html.matchAll(
+    /<script(?![^>]*\bsrc=)[^>]*>([\s\S]*?)<\/script>/gi
+  )) {
+    hashes.push(createHash("sha256").update(match[1]).digest("base64"));
+  }
+
+  return hashes;
+}
+
+const API_ORIGIN = apiOriginFromEnv();
+const INLINE_SCRIPT_HASHES = await inlineScriptHashes();
+
+/**
+ * Scripts are same-origin plus the shell's one hashed inline bootstrap, with no
+ * `'unsafe-inline'`. Inline styles stay allowed because the UI sets React
+ * `style` attributes, and the Google Fonts hosts are named because it loads them.
+ */
+const CONTENT_SECURITY_POLICY = [
+  "default-src 'self'",
+  [
+    "script-src 'self'",
+    ...INLINE_SCRIPT_HASHES.map((hash) => `'sha256-${hash}'`),
+  ].join(" "),
+  "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
+  "font-src 'self' https://fonts.gstatic.com",
+  `connect-src 'self' ${API_ORIGIN}`,
+  "object-src 'none'",
+  "base-uri 'self'",
+  "form-action 'self'",
+  "frame-ancestors 'none'",
+].join("; ");
 
 async function fileAt(candidate) {
   try {
@@ -117,6 +189,7 @@ const server = createServer(async (request, response) => {
   const headers = {
     "Content-Type": contentType,
     "X-Content-Type-Options": "nosniff",
+    "Content-Security-Policy": CONTENT_SECURITY_POLICY,
     "Cache-Control": pathname.startsWith(IMMUTABLE_PREFIX)
       ? "public, max-age=31536000, immutable"
       : isShell

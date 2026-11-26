@@ -116,6 +116,9 @@ the values that matter:
 
 `PORT` defaults to 3000. The web build needs `VITE_API_URL` **at build time** —
 it is inlined by Vite, so changing the API URL means rebuilding the web image.
+The web container also needs the same value at **run time**: `server.mjs` puts
+it in the `Content-Security-Policy` `connect-src`, so a mismatch lets the page
+load but blocks every API call. `docker-compose.yml` passes it to both stages.
 
 ### 4.1 Data handling — what leaves the deployment
 

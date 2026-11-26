@@ -160,6 +160,9 @@ services:
       args:
         # Baked into the bundle at build time; must be reachable from the browser.
         VITE_API_URL: ${VITE_API_URL:-http://localhost:3000}
+    environment:
+      # Same origin, read at run time for the CSP connect-src.
+      VITE_API_URL: ${VITE_API_URL:-http://localhost:3000}
     ports:
       - "${WEB_PORT:-4173}:4173"
     depends_on:

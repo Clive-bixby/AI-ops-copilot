@@ -114,6 +114,9 @@ services:
       context: ./apps/web
       args:
         VITE_API_URL: ${VITE_API_URL:-http://localhost:3000}
+    environment:
+      # Read at run time for the CSP connect-src; must match the build value.
+      VITE_API_URL: ${VITE_API_URL:-http://localhost:3000}
     ports:
       - "${WEB_PORT:-4173}:4173"
     depends_on:
