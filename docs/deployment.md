@@ -360,8 +360,8 @@ curl -fsS https://your-api/health
 # 2. Database reachable, Redis status visible
 curl -fsS https://your-api/ready | jq
 
-# 3. Embeddings configured for this environment
-curl -fsS https://your-api/ai/health | jq '{healthy, provider, model, dimensions}'
+# 3. Embeddings configured, and generation not retired/unset (503 if either is)
+curl -fsS https://your-api/ai/health | jq '{healthy, provider, model, dimensions, generation}'
 
 # 4. CORS actually allows the web origin (a preflight, not a direct GET)
 curl -s -o /dev/null -D - -X OPTIONS https://your-api/auth/login \
@@ -426,6 +426,8 @@ State these on the product itself rather than discovering them in a demo:
 | `/ready` 503 | Database unreachable, wrong TLS mode, or pool exhausted | Set `DATABASE_SSL` / `?sslmode=require`; lower `DB_POOL_MAX`; check Neon is not suspended |
 | `/ready` 200 but `checks.redis.down` | Redis unreachable | Ingestion stops, the rest works. Check the Upstash URL is `rediss://` |
 | `/ai/health` 503, "EMBEDDING_BASE_URL is required" | `EMBEDDING_PROVIDER=openai-compatible` without a URL | Set `EMBEDDING_BASE_URL`, or switch to `fixture` |
+| `/ai/health` 503, `generation.error` says "was shut down by Google" | `LLM_MODEL` / `GEMINI_MODEL` names a retired model, so every analysis would 404 | Set a current model; `docs/phase-5.5-decision.md` names the one measured here |
+| `/ai/health` 503, `generation.model` is `unconfigured` | Unknown `LLM_PROVIDER`, or `openai-compatible` with no `LLM_MODEL` | Fix `LLM_PROVIDER`; set `LLM_MODEL` |
 | "has not been recorded" on upload or search | Fixture mode, and the text was never recorded | Expected. Use a real provider to accept new documents or a visitor's own question; see §5 and §8 |
 | Browser blocks every request (CORS) | `CORS_ORIGINS` does not contain the exact origin | Set it to the scheme+host with no trailing slash, then redeploy |
 | Everyone gets 429 at once | `TRUST_PROXY` unset behind a platform router | Set `TRUST_PROXY=1` |

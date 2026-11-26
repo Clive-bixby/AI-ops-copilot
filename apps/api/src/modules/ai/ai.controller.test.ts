@@ -178,3 +178,88 @@ test("a misconfigured provider is reported instead of thrown", async () => {
     assert.match(String(generation.error), /Unknown LLM_PROVIDER/);
   });
 });
+
+/**
+ * The status, not just the body. A deployment whose analyses all fail is not
+ * healthy, and the previous 200 made that indistinguishable from a working one.
+ */
+test("an unconfigured generation provider makes the endpoint unavailable", async () => {
+  await withEnvironment(
+    {
+      EMBEDDING_PROVIDER: "fixture",
+      EMBEDDING_MODEL: "nomic-embed-text",
+      LLM_PROVIDER: "not-a-provider",
+    },
+    async () => {
+      const response = fakeResponse();
+      const body = await callHealth(response);
+
+      assert.equal(response.statusCode, 503);
+      // Embeddings are fine; the body still says so.
+      assert.equal(body.healthy, true);
+      assert.equal(
+        (body.generation as { model: string }).model,
+        "unconfigured"
+      );
+    }
+  );
+});
+
+test("an empty model is unconfigured, not a healthy deployment", async () => {
+  await withEnvironment(
+    {
+      EMBEDDING_PROVIDER: "fixture",
+      EMBEDDING_MODEL: "nomic-embed-text",
+      LLM_PROVIDER: "openai-compatible",
+    },
+    async () => {
+      const response = fakeResponse();
+      const body = await callHealth(response);
+      const generation = body.generation as { model: string; error?: string };
+
+      assert.equal(response.statusCode, 503);
+      assert.equal(generation.model, "unconfigured");
+      assert.match(String(generation.error), /LLM_MODEL is required/);
+    }
+  );
+});
+
+test("a model Google has shut down is reported, not silently healthy", async () => {
+  await withEnvironment(
+    {
+      EMBEDDING_PROVIDER: "fixture",
+      EMBEDDING_MODEL: "nomic-embed-text",
+      LLM_MODEL: "gemini-1.5-pro",
+    },
+    async () => {
+      const response = fakeResponse();
+      const body = await callHealth(response);
+      const generation = body.generation as { model: string; error?: string };
+
+      assert.equal(response.statusCode, 503);
+      assert.equal(generation.model, "gemini-1.5-pro");
+      assert.match(String(generation.error), /was shut down by Google on 2025-09-29/);
+    }
+  );
+});
+
+test("a routed-but-live model is not called retired", async () => {
+  await withEnvironment({ LLM_MODEL: "gemini-2.5-flash" }, async () => {
+    const generation = describeGeneration();
+
+    assert.equal(generation.model, "gemini-2.5-flash");
+    assert.equal(generation.error, undefined);
+  });
+});
+
+test("retirement only applies to Gemini model names", async () => {
+  await withEnvironment(
+    { LLM_PROVIDER: "openai-compatible", LLM_MODEL: "gemini-1.5-pro" },
+    async () => {
+      const generation = describeGeneration();
+
+      assert.equal(generation.provider, "openai-compatible");
+      assert.equal(generation.error, undefined);
+    }
+  );
+});

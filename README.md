@@ -254,6 +254,11 @@ satisfy. `EMBEDDING_PROVIDER` now selects the backend:
 `/ai/health` reports the active provider, model, width and endpoint, and whether
 that provider answers. Ingestion and search do not know which one is in use.
 
+The same endpoint reports the generation model and returns **503** when that
+model cannot answer — an unknown provider, a missing `LLM_MODEL`, or a Gemini
+model Google has since shut down — because a deployment whose every analysis
+fails is not healthy even while embeddings work.
+
 Two limits are worth stating plainly:
 
 - **The stored width is fixed at 768.** `source_chunks.embedding` is

@@ -15,7 +15,8 @@ import {
   validateSourceTypes,
 } from "./retrieval.service.js";
 import { answerQuestion, validateRAGQuestion } from "./rag.service.js";
-import { readLlmSettings } from "./llm/index.js";
+import { readLlmSettings, retiredGenerationModel } from "./llm/index.js";
+import type { LlmSettings } from "./llm/index.js";
 
 /**
  * POST /ai/test-embedding
@@ -42,20 +43,25 @@ export const testEmbeddingController = asyncHandler(async (req, res) => {
 
 /**
  * Which generation model would answer, read from configuration without calling
- * it. The endpoint used to report embeddings only, so a deployment could look
+ * it. `error` means generation cannot answer at all, which is what the health
+ * endpoint turns into a 503.
+ */
+export type GenerationStatus = {
+  provider: string;
+  model: string;
+  fallback: string | null;
+  error?: string;
+};
+
+/**
+ * The endpoint used to report embeddings only, so a deployment could look
  * healthy while every analysis pointed at a model that had since been retired.
  */
-export function describeGeneration() {
-  try {
-    const settings = readLlmSettings();
+export function describeGeneration(): GenerationStatus {
+  let settings: LlmSettings;
 
-    return {
-      provider: settings.provider,
-      model: settings.model,
-      fallback: settings.fallback
-        ? `${settings.fallback.provider}/${settings.fallback.model}`
-        : null,
-    };
+  try {
+    settings = readLlmSettings();
   } catch (error) {
     return {
       provider: process.env.LLM_PROVIDER?.trim() || "gemini",
@@ -64,6 +70,31 @@ export function describeGeneration() {
       error: error instanceof Error ? error.message : "Generation is not configured.",
     };
   }
+
+  const fallback = settings.fallback
+    ? `${settings.fallback.provider}/${settings.fallback.model}`
+    : null;
+
+  // `readLlmSettings` accepts an empty model; only `createLlmProvider` rejects
+  // it. That is enough for a request to fail, so it is unconfigured here too.
+  if (settings.model.trim() === "") {
+    return {
+      provider: settings.provider,
+      model: "unconfigured",
+      fallback,
+      error: `LLM_MODEL is required when LLM_PROVIDER=${settings.provider}.`,
+    };
+  }
+
+  const retired =
+    settings.provider === "gemini" ? retiredGenerationModel(settings.model) : null;
+
+  return {
+    provider: settings.provider,
+    model: settings.model,
+    fallback,
+    ...(retired === null ? {} : { error: retired }),
+  };
 }
 
 /**
@@ -73,13 +104,19 @@ export function describeGeneration() {
  * with the model installed, an OpenAI-compatible API listing the model, or a
  * fixture file holding vectors -- plus the generation model, which is never
  * called here.
+ *
+ * The status covers both halves. An embedder that answers while every analysis
+ * would fail is not a healthy deployment, and a status that said 200 there is
+ * exactly the blind spot the generation block exists to close. `healthy` in the
+ * body still describes embeddings alone.
  */
 export const aiHealthController = asyncHandler(async (_req, res) => {
   const health = await checkEmbeddingHealth();
+  const generation = describeGeneration();
 
-  const status = health.healthy ? 200 : 503;
+  const status = health.healthy && generation.error === undefined ? 200 : 503;
 
-  return res.status(status).json({ ...health, generation: describeGeneration() });
+  return res.status(status).json({ ...health, generation });
 });
 
 /**

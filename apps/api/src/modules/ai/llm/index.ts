@@ -24,6 +24,54 @@ export type { LlmProviderSettings, LlmSettings } from "./settings.js";
 export type LlmFeature = "rag" | "analysis";
 
 const DEFAULT_GEMINI_MODEL = "gemini-3.5-flash-lite";
+
+/**
+ * Gemini text models Google has already shut down, so `/ai/health` can say so
+ * instead of reporting a green deployment whose every analysis returns 404.
+ *
+ * Families, not ids: Google retires `gemini-1.5-pro`, `-001` and `-002`
+ * together, and the date belongs to the family. Checked against the Gemini API
+ * deprecations page on 2026-11-26. A model that still answers but is routed to a
+ * successor (`gemini-2.5-flash`, routed from 2026-12-01) is deliberately absent:
+ * it works, it just is not the model the name suggests.
+ */
+const RETIRED_GEMINI_MODELS: readonly { model: string; shutDown: string }[] = [
+  { model: "gemini-1.0-pro", shutDown: "2025-04-21" },
+  { model: "gemini-pro-vision", shutDown: "2025-04-21" },
+  { model: "gemini-1.5-pro", shutDown: "2025-09-29" },
+  { model: "gemini-1.5-flash", shutDown: "2025-09-29" },
+  { model: "gemini-3-pro-preview", shutDown: "2026-03-09" },
+  { model: "gemini-2.0-flash", shutDown: "2026-06-01" },
+  { model: "text-bison", shutDown: "2025-04-21" },
+  { model: "chat-bison", shutDown: "2025-04-21" },
+];
+
+/**
+ * Why a configured model cannot answer, or null if it might. Configuration
+ * only: this never calls the provider, so a health check stays free.
+ */
+export function retiredGenerationModel(model: string): string | null {
+  const normalized = model.trim().toLowerCase();
+
+  if (normalized === "") {
+    return null;
+  }
+
+  const retired = RETIRED_GEMINI_MODELS.find(
+    (candidate) =>
+      normalized === candidate.model || normalized.startsWith(`${candidate.model}-`)
+  );
+
+  if (retired === undefined) {
+    return null;
+  }
+
+  return (
+    `The configured generation model "${model}" was shut down by Google on ` +
+    `${retired.shutDown}. Set LLM_MODEL (or GEMINI_MODEL) to a current model; ` +
+    "docs/phase-5.5-decision.md records the one this project measured."
+  );
+}
 const DEFAULT_TIMEOUT_MS = 60_000;
 const DEFAULT_MAX_RETRIES = 2;
 const DEFAULT_RETRY_BASE_DELAY_MS = 500;
