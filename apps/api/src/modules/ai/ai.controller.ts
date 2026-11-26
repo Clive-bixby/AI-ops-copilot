@@ -41,13 +41,6 @@ export const testEmbeddingController = asyncHandler(async (req, res) => {
 });
 
 /**
- * GET /ai/health
- *
- * Report the configured provider and whether it can answer: Ollama reachable
- * with the model installed, an OpenAI-compatible API listing the model, or a
- * fixture file holding vectors.
- */
-/**
  * Which generation model would answer, read from configuration without calling
  * it. The endpoint used to report embeddings only, so a deployment could look
  * healthy while every analysis pointed at a model that had since been retired.
@@ -73,6 +66,14 @@ export function describeGeneration() {
   }
 }
 
+/**
+ * GET /ai/health
+ *
+ * Report the configured provider and whether it can answer: Ollama reachable
+ * with the model installed, an OpenAI-compatible API listing the model, or a
+ * fixture file holding vectors -- plus the generation model, which is never
+ * called here.
+ */
 export const aiHealthController = asyncHandler(async (_req, res) => {
   const health = await checkEmbeddingHealth();
 

@@ -1,5 +1,5 @@
 import fs from "node:fs";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { pool } from "../core/db.js";
 import { getEmbeddingProvider } from "../modules/ai/embedding/index.js";
@@ -30,7 +30,7 @@ const ORG_NAME = "Northwind Ops (Demo)";
 const BATCH_SIZE = 16;
 
 /** The questions `docs/deployment.md` tells demo visitors to ask. */
-export const DEMO_QUESTIONS = [
+const DEMO_QUESTIONS = [
   "How do we recover from PostgreSQL connection pool exhaustion?",
   "Why are large uploads failing with 413?",
   "What is the rollback procedure for a failed deployment?",
@@ -150,6 +150,16 @@ async function main(): Promise<void> {
     const batchTexts = texts.slice(index, index + BATCH_SIZE);
     const batch = await provider.embed(batchTexts);
 
+    // A provider that returns a short batch would leave a question without a
+    // vector while the run still reports success, so the demo would fail on a
+    // question the docs promise works. Fail loudly instead.
+    if (batch.embeddings.length !== batchTexts.length) {
+      throw new Error(
+        `${provider.name}/${provider.model} returned ${batch.embeddings.length} ` +
+          `vectors for ${batchTexts.length} texts; refusing to write a partial fixture.`
+      );
+    }
+
     batchTexts.forEach((text, offset) => {
       const vector = batch.embeddings[offset]!;
       fixture.vectors[fixtureKeyOf(text)] = vector;
@@ -166,8 +176,16 @@ async function main(): Promise<void> {
   await pool.end();
 }
 
-main().catch(async (error) => {
-  console.error("Recording demo fixtures failed", error);
-  await pool.end().catch(() => undefined);
-  process.exitCode = 1;
-});
+/**
+ * Run only when invoked as a script (`npm run embed:demo-fixtures`). Importing
+ * this module must not start a recording: a test or a future script may want
+ * to read it, and a side effect on import would hit the database and an
+ * embedding provider for no reason.
+ */
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  main().catch(async (error) => {
+    console.error("Recording demo fixtures failed", error);
+    await pool.end().catch(() => undefined);
+    process.exitCode = 1;
+  });
+}
