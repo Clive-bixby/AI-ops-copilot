@@ -3,7 +3,11 @@ import path from "path";
 
 import { asyncHandler } from "../../utils/asyncHandler.js";
 import { createHttpError } from "../../utils/httpError.js";
-import { DocumentParserError } from "../ai/documentParser.service.js";
+import { readListPagination } from "../../utils/pagination.js";
+import {
+  assertContentMatchesExtension,
+  DocumentParserError,
+} from "../ai/documentParser.service.js";
 import { DocumentProcessingError } from "../ai/documentProcessing.service.js";
 import {
   EmbeddingConnectionError,
@@ -62,10 +66,17 @@ export const createDocumentController = asyncHandler(async (req, res) => {
 
   // Hash the original bytes before parsing: identical uploads are rejected
   // before any parsing or embedding work is spent on them, and the hash is also
-  // the request fingerprint for Idempotency-Key replays.
+  // the request fingerprint for Idempotency-Key replays. The same bytes are
+  // sniffed first so a file that lies about its type is refused now, with a
+  // 400, instead of failing later inside a job the user was told was queued.
   let fileHash: string;
   try {
-    fileHash = hashFileBytes(await fs.readFile(file.path));
+    const bytes = await fs.readFile(file.path);
+    assertContentMatchesExtension(
+      path.extname(file.originalname || file.filename),
+      bytes
+    );
+    fileHash = hashFileBytes(bytes);
   } catch (error) {
     await removeUploadedFileSafely(file.path);
     throw error;
@@ -184,7 +195,10 @@ export const listDocumentsController = asyncHandler(async (req, res) => {
     throw createHttpError(400, "Organization ID is required");
   }
 
-  const result = await listDocuments(organizationId);
+  const result = await listDocuments(
+    organizationId,
+    readListPagination(req.query)
+  );
   return res.status(200).json(result);
 });
 

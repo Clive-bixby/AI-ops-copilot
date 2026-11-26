@@ -1,4 +1,5 @@
 import { pool } from "../../core/db.js";
+import type { ListPagination } from "../../utils/pagination.js";
 
 export type CreateDocumentInput = {
   organizationId: string;
@@ -101,7 +102,10 @@ export async function createDocument(input: CreateDocumentInput) {
   };
 }
 
-export async function listDocuments(organizationId: string) {
+export async function listDocuments(
+  organizationId: string,
+  pagination: ListPagination
+) {
   const orgId = (organizationId || "").trim();
 
   if (!orgId) {
@@ -125,9 +129,10 @@ export async function listDocuments(organizationId: string) {
      AND sc.source_id = d.id
     WHERE d.organization_id = $1
     GROUP BY d.id
-    ORDER BY d.created_at DESC
+    ORDER BY d.created_at DESC, d.id DESC
+    LIMIT $2 OFFSET $3
     `,
-    [orgId]
+    [orgId, pagination.limit, pagination.offset]
   );
 
   return result.rows.map((row) => ({

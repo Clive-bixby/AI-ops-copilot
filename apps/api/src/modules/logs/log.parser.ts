@@ -1,3 +1,5 @@
+import { MAX_INGEST_BATCH_ENTRIES } from "../../config/limits.js";
+
 export type NormalizedLog = {
   level: string;
   message: string;
@@ -121,12 +123,21 @@ function parseSingleLog(raw: unknown): NormalizedLog {
   throw new LogParseError("Log payload must be a string or object");
 }
 
+function assertBatchSize(count: number): void {
+  if (count > MAX_INGEST_BATCH_ENTRIES) {
+    throw new LogParseError(
+      `A single request may contain at most ${MAX_INGEST_BATCH_ENTRIES} log entries; received ${count}`
+    );
+  }
+}
+
 export function parseRawLogs(payload: unknown): NormalizedLog[] {
   if (Array.isArray(payload)) {
     const entries = payload.filter((e) => !(typeof e === "string" && e.trim() === ""));
     if (entries.length === 0) {
       throw new LogParseError("At least one log entry is required");
     }
+    assertBatchSize(entries.length);
     return entries.map((entry) => parseSingleLog(entry));
   }
 
@@ -137,6 +148,7 @@ export function parseRawLogs(payload: unknown): NormalizedLog[] {
     if (entries.length === 0) {
       throw new LogParseError("At least one log entry is required");
     }
+    assertBatchSize(entries.length);
 
     return entries.map((entry) => parseSingleLog(entry));
   }

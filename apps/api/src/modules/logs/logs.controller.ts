@@ -1,5 +1,6 @@
 import { asyncHandler } from "../../utils/asyncHandler.js";
 import { createHttpError } from "../../utils/httpError.js";
+import { readListPagination } from "../../utils/pagination.js";
 import { hashContent } from "../ingestion/embeddingConfig.js";
 import { runIdempotent } from "../ingestion/idempotency.service.js";
 import { getLogGroup, ingestLogs, listLogs } from "./logs.service.js";
@@ -45,7 +46,7 @@ export const listLogsController = asyncHandler(async (req, res) => {
     throw createHttpError(400, "Organization ID is required");
   }
 
-  const logs = await listLogs(organizationId);
+  const logs = await listLogs(organizationId, readListPagination(req.query));
   return res.status(200).json(logs);
 });
 

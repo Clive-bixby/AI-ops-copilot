@@ -1,4 +1,5 @@
 import { pool } from "../../core/db.js";
+import type { ListPagination } from "../../utils/pagination.js";
 import { logger } from "../../core/logger.js";
 import { hashLogEvent } from "../ingestion/embeddingConfig.js";
 import { enqueueIngestionJob } from "../ingestion/jobQueue.js";
@@ -154,14 +155,19 @@ export async function ingestLogs(
   };
 }
 
-export async function listLogs(organizationId: string) {
+export async function listLogs(
+  organizationId: string,
+  pagination: ListPagination
+) {
   const result = await pool.query<StoredLogRow>(
+    // The id tie-break keeps offset paging coherent when many events share a
+    // timestamp, which a bulk ingest easily produces.
     `SELECT id, organization_id, level, message, metadata, timestamp, created_at
      FROM logs
      WHERE organization_id = $1
-     ORDER BY timestamp DESC
-     LIMIT 100`,
-    [organizationId]
+     ORDER BY timestamp DESC, id DESC
+     LIMIT $2 OFFSET $3`,
+    [organizationId, pagination.limit, pagination.offset]
   );
   return result.rows;
 }

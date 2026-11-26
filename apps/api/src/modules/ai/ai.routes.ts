@@ -3,6 +3,7 @@ import { Router } from "express";
 import { devOnlyMiddleware } from "../../middleware/devOnly.middleware.js";
 import { authMiddleware } from "../../middleware/auth.middleware.js";
 import { orgMiddleware } from "../../middleware/org.middleware.js";
+import { aiRateLimiter } from "../../middleware/rateLimit.middleware.js";
 import {
   askQuestion,
   aiHealthController,
@@ -52,10 +53,17 @@ aiRouter.post(
   testSearchController
 );
 
-// Production semantic search, scoped to the active organization
-aiRouter.post("/search", authMiddleware, orgMiddleware, searchController);
+// Production semantic search, scoped to the active organization. Both routes
+// embed text with the configured provider, so they sit behind the AI budget.
+aiRouter.post(
+  "/search",
+  aiRateLimiter,
+  authMiddleware,
+  orgMiddleware,
+  searchController
+);
 
 // Production RAG question answering, scoped to the active organization
-aiRouter.post("/ask", authMiddleware, orgMiddleware, askQuestion);
+aiRouter.post("/ask", aiRateLimiter, authMiddleware, orgMiddleware, askQuestion);
 
 export default aiRouter;

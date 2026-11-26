@@ -2,6 +2,7 @@ import { Router } from "express";
 
 import { authMiddleware } from "../../middleware/auth.middleware.js";
 import { orgMiddleware } from "../../middleware/org.middleware.js";
+import { aiRateLimiter } from "../../middleware/rateLimit.middleware.js";
 import actionItemsRouter from "../actionItems/routes.js";
 import {
   analyzeInvestigationController,
@@ -59,9 +60,11 @@ investigationsRouter.get(
   getInvestigationTimelineController
 );
 
-// Analysis is synchronous: the engineer waits for the stored result.
+// Analysis is synchronous and calls the generation provider, so it shares the
+// AI budget rather than the broad API budget.
 investigationsRouter.post(
   "/:id/analyze",
+  aiRateLimiter,
   authMiddleware,
   orgMiddleware,
   analyzeInvestigationController
@@ -82,9 +85,10 @@ investigationsRouter.patch(
   updateHypothesisController
 );
 
-// Follow-up questions are answered from this investigation only.
+// Follow-up questions are answered from this investigation only, by the model.
 investigationsRouter.post(
   "/:id/questions",
+  aiRateLimiter,
   authMiddleware,
   orgMiddleware,
   askInvestigationQuestionController
@@ -117,6 +121,7 @@ investigationsRouter.post(
 
 investigationsRouter.post(
   "/:id/evidence/collect",
+  aiRateLimiter,
   authMiddleware,
   orgMiddleware,
   collectInvestigationEvidenceController

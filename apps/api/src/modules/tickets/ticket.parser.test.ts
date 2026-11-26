@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
+import { MAX_INGEST_BATCH_ENTRIES } from "../../config/limits.js";
 import { parseRawTickets, TicketParseError } from "./ticket.parser.js";
 
 describe("parseRawTickets", () => {
@@ -84,5 +85,32 @@ describe("parseRawTickets", () => {
     assert.ok(ticket);
     assert.equal(ticket.title, "Nightly backup failed");
     assert.equal(ticket.status, "open");
+  });
+
+  it("accepts a batch at the entry limit and rejects one entry more", () => {
+    const atLimit = Array.from(
+      { length: MAX_INGEST_BATCH_ENTRIES },
+      (_, index) => ({ title: `Ticket ${index}`, description: "bulk import" })
+    );
+
+    assert.equal(parseRawTickets(atLimit).length, MAX_INGEST_BATCH_ENTRIES);
+    assert.throws(
+      () => parseRawTickets([...atLimit, { title: "one too many" }]),
+      TicketParseError
+    );
+    assert.throws(
+      () => parseRawTickets({ tickets: [...atLimit, { title: "one too many" }] }),
+      TicketParseError
+    );
+  });
+
+  it("applies the same limit to a CSV batch", () => {
+    const rows = Array.from(
+      { length: MAX_INGEST_BATCH_ENTRIES + 1 },
+      (_, index) => `Ticket ${index},bulk import,open,high`
+    );
+    const csv = ["title,description,status,priority", ...rows].join("\n");
+
+    assert.throws(() => parseRawTickets({ csv }), TicketParseError);
   });
 });

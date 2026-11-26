@@ -1,3 +1,5 @@
+import { MAX_INGEST_BATCH_ENTRIES } from "../../config/limits.js";
+
 export type NormalizedTicket = {
   title: string;
   description: string;
@@ -134,6 +136,8 @@ function parseCsvTickets(csv: string): NormalizedTicket[] {
     tickets.push(parseTicketObject(rawTicket));
   }
 
+  assertBatchSize(tickets.length);
+
   return tickets;
 }
 
@@ -175,11 +179,20 @@ function parseSingleTicket(raw: unknown): NormalizedTicket {
   throw new TicketParseError("Ticket payload must be a string or object");
 }
 
+function assertBatchSize(count: number): void {
+  if (count > MAX_INGEST_BATCH_ENTRIES) {
+    throw new TicketParseError(
+      `A single request may contain at most ${MAX_INGEST_BATCH_ENTRIES} tickets; received ${count}`
+    );
+  }
+}
+
 export function parseRawTickets(payload: unknown): NormalizedTicket[] {
   if (Array.isArray(payload)) {
     if (payload.length === 0) {
       throw new TicketParseError("At least one ticket entry is required");
     }
+    assertBatchSize(payload.length);
     return payload.map((entry) => parseSingleTicket(entry));
   }
 
@@ -200,6 +213,7 @@ export function parseRawTickets(payload: unknown): NormalizedTicket[] {
     if (payload.tickets.length === 0) {
       throw new TicketParseError("At least one ticket entry is required");
     }
+    assertBatchSize(payload.tickets.length);
     return payload.tickets.map((entry) => parseSingleTicket(entry));
   }
 

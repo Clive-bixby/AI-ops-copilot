@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
+import { MAX_INGEST_BATCH_ENTRIES } from "../../config/limits.js";
 import { LogParseError, parseRawLogs } from "./log.parser.js";
 
 describe("parseRawLogs", () => {
@@ -82,5 +83,22 @@ describe("parseRawLogs", () => {
     assert.throws(() => parseRawLogs([]), LogParseError);
     assert.throws(() => parseRawLogs({ logs: [] }), LogParseError);
     assert.throws(() => parseRawLogs([42]), LogParseError);
+  });
+
+  it("accepts a batch at the entry limit and rejects one entry more", () => {
+    const atLimit = Array.from(
+      { length: MAX_INGEST_BATCH_ENTRIES },
+      (_, index) => `event ${index}`
+    );
+
+    assert.equal(parseRawLogs(atLimit).length, MAX_INGEST_BATCH_ENTRIES);
+    assert.throws(
+      () => parseRawLogs([...atLimit, "one too many"]),
+      LogParseError
+    );
+    assert.throws(
+      () => parseRawLogs({ logs: [...atLimit, "one too many"] }),
+      LogParseError
+    );
   });
 });

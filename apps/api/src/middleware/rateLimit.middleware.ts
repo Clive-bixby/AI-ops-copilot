@@ -28,6 +28,23 @@ export const apiRateLimiter = rateLimit({
   message: { error: "Too many requests. Please retry in a minute." },
 });
 
+/**
+ * Budget for the routes that spend provider quota.
+ *
+ * Generation and query embedding are the only calls that cost money per
+ * request, so they do not share the broad per-IP API budget: one authenticated
+ * member looping `/ai/ask` or `/investigations/:id/analyze` could otherwise
+ * exhaust the owner's quota within the ordinary 120/min allowance. Mounted on
+ * the routes that call a model, never on reads.
+ */
+export const aiRateLimiter = rateLimit({
+  windowMs: 60_000,
+  limit: positiveIntFromEnv("AI_RATE_LIMIT_MAX", 20),
+  standardHeaders: "draft-7",
+  legacyHeaders: false,
+  message: { error: "Too many AI requests. Please retry in a minute." },
+});
+
 /** Stricter budget for credential endpoints to slow password guessing. */
 export const authRateLimiter = rateLimit({
   windowMs: 15 * 60_000,

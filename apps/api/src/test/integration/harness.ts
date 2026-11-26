@@ -139,10 +139,17 @@ export type TestServer = {
   close: () => Promise<void>;
 };
 
-/** Start the real Express app on an ephemeral port. */
-export async function startServer(): Promise<TestServer> {
+/**
+ * Start the real Express app on an ephemeral port.
+ *
+ * Rate limiting is off by default because a suite legitimately repeats requests
+ * from one address; a test that asserts the limiter passes it explicitly.
+ */
+export async function startServer(
+  options: { disableRateLimit?: boolean } = {}
+): Promise<TestServer> {
   const { createApp } = await import("../../app.js");
-  const app = createApp({ disableRateLimit: true });
+  const app = createApp({ disableRateLimit: options.disableRateLimit ?? true });
   const server = app.listen(0);
   await once(server, "listening");
 

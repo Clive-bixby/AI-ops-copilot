@@ -1,4 +1,5 @@
 import { pool } from "../../core/db.js";
+import type { ListPagination } from "../../utils/pagination.js";
 import { logger } from "../../core/logger.js";
 import { hashContent } from "../ingestion/embeddingConfig.js";
 import { enqueueIngestionJob } from "../ingestion/jobQueue.js";
@@ -106,14 +107,17 @@ export async function ingestTickets(
   return { tickets, jobsQueued, indexingError };
 }
 
-export async function listTickets(organizationId: string) {
+export async function listTickets(
+  organizationId: string,
+  pagination: ListPagination
+) {
   const result = await pool.query<StoredTicketRow>(
     `SELECT id, organization_id, title, description, status, priority, created_at
      FROM tickets
      WHERE organization_id = $1
-     ORDER BY created_at DESC
-     LIMIT 100`,
-    [organizationId]
+     ORDER BY created_at DESC, id DESC
+     LIMIT $2 OFFSET $3`,
+    [organizationId, pagination.limit, pagination.offset]
   );
   return result.rows;
 }

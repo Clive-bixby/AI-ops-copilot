@@ -1,5 +1,6 @@
 import { asyncHandler } from "../../utils/asyncHandler.js";
 import { createHttpError } from "../../utils/httpError.js";
+import { readListPagination } from "../../utils/pagination.js";
 import { hashContent } from "../ingestion/embeddingConfig.js";
 import { runIdempotent } from "../ingestion/idempotency.service.js";
 import { getTicket, ingestTickets, listTickets } from "./tickets.service.js";
@@ -43,7 +44,10 @@ export const listTicketsController = asyncHandler(async (req, res) => {
     throw createHttpError(400, "Organization ID is required");
   }
 
-  const tickets = await listTickets(organizationId);
+  const tickets = await listTickets(
+    organizationId,
+    readListPagination(req.query)
+  );
   return res.status(200).json(tickets);
 });
 

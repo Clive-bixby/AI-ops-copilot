@@ -169,7 +169,6 @@ export const searchController = asyncHandler(async (req, res) => {
  * builds a grounded prompt, calls the configured LLM, and returns citations.
  */
 export const askQuestion = asyncHandler(async (req, res) => {
-  const startedAt = Date.now();
   const organizationId = req.organizationId;
   const { question } = req.body as { question?: unknown };
 
@@ -179,17 +178,10 @@ export const askQuestion = asyncHandler(async (req, res) => {
 
   const trimmedQuestion = validateRAGQuestion(question);
 
-  console.log("Ask question request received", {
-    organizationId,
-    questionLength: trimmedQuestion.length,
-  });
-
+  // The RAG layer already logs `rag.started` / `rag.completed` through
+  // `aiMetrics` (counts, lengths, model, timings). Two free-form console lines
+  // duplicated that data outside the JSON log stream.
   const result = await answerQuestion(trimmedQuestion, organizationId);
-
-  console.log("Ask question request completed", {
-    organizationId,
-    executionTimeMs: Date.now() - startedAt,
-  });
 
   return res.status(200).json({
     question: trimmedQuestion,
