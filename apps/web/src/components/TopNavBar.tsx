@@ -24,16 +24,16 @@ export function TopNavBar({ onMenuClick }: { onMenuClick: () => void }) {
   const { data } = useApiData<ShellStatus>(async () => {
     const [system, health] = await Promise.all([
       api.status().catch(() => null),
-      api.ai.health().catch((error: unknown) => ({
-        error: errorMessage(error),
-      })),
+      // Rejects only for an unreachable API: a 503 still carries the payload, so
+      // a retired model arrives as `health.generation.error`, not as an error.
+      api.ai.health().catch((error: unknown) => errorMessage(error)),
     ]);
 
-    if (health && 'error' in health) {
-      return { system, health: null, healthError: health.error ?? 'Unavailable' };
+    if (typeof health === 'string') {
+      return { system, health: null, healthError: health };
     }
 
-    return { system, health: health as ApiHealth | null, healthError: null };
+    return { system, health, healthError: health?.generation?.error ?? null };
   }, []);
 
   useEffect(() => {
@@ -58,7 +58,21 @@ export function TopNavBar({ onMenuClick }: { onMenuClick: () => void }) {
   const orgName = session?.organization.name ?? 'Organization';
   const environment = data?.system?.environment ?? 'api';
   const healthy = data?.health?.healthy === true;
+  const generation = data?.health?.generation;
   const roleLabel = titleCase(role ?? 'member');
+
+  const embeddingsTitle = data?.health
+    ? [
+        `Embeddings: ${data.health.model}${data.health.healthy ? '' : ' (unavailable)'}`,
+        data.health.endpoint,
+      ]
+        .filter(Boolean)
+        .join(' · ')
+    : data?.healthError ?? 'Embedding health check pending';
+
+  const generationTitle = generation
+    ? `Generation: ${generation.provider}/${generation.model}${generation.error ? ` — ${generation.error}` : ''}`
+    : 'Generation: not reported by this API';
 
   const pageLabel =
     {
@@ -125,11 +139,7 @@ export function TopNavBar({ onMenuClick }: { onMenuClick: () => void }) {
               ? 'border-success-line bg-success-surface text-success-ink'
               : 'border-outline-variant bg-surface-low text-on-surface-variant'
           )}
-          title={
-            healthy
-              ? `${data?.health?.model ?? 'Embedding model'} · ${data?.health?.endpoint ?? ''}`
-              : data?.healthError ?? 'Embedding health check pending'
-          }
+          title={embeddingsTitle}
         >
           <span
             className={clsx(
@@ -140,6 +150,17 @@ export function TopNavBar({ onMenuClick }: { onMenuClick: () => void }) {
           <span className="hidden xl:inline">EMBEDDINGS:</span>
           <span className="font-semibold">{healthy ? 'LIVE' : 'OFFLINE'}</span>
         </div>
+
+        {generation?.error ? (
+          <div
+            className="hidden items-center gap-1.5 rounded border border-warning-line bg-warning-surface px-2 py-1.5 font-mono text-label-sm text-warning-ink md:flex"
+            title={generationTitle}
+          >
+            <span className="h-1.5 w-1.5 rounded-full bg-warning" />
+            <span className="hidden xl:inline">GENERATION:</span>
+            <span className="font-semibold">OFFLINE</span>
+          </div>
+        ) : null}
 
         <div className="hidden items-center gap-1.5 rounded border border-outline-variant bg-surface-low px-2 py-1.5 font-mono text-label-sm text-on-surface-variant md:flex">
           <Icon name="deployed_code" size={13} className="text-outline" />

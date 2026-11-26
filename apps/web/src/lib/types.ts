@@ -31,6 +31,19 @@ export interface RootStatus {
   timestamp: string;
 }
 
+/**
+ * Which model would answer an analysis, read from configuration. `error` means
+ * it cannot answer at all -- unknown provider, no model, or a model the vendor
+ * has retired -- and the endpoint answers 503 in that case.
+ */
+export interface GenerationStatus {
+  provider: string;
+  model: string;
+  /** `provider/model`, or null when no fallback is enabled. */
+  fallback: string | null;
+  error?: string;
+}
+
 export interface ApiHealth {
   healthy: boolean;
   /** "ollama" | "openai-compatible" | "fixture" */
@@ -41,6 +54,8 @@ export interface ApiHealth {
   /** Base URL of the embedding service, or the fixture file path. */
   endpoint: string;
   message: string;
+  /** Absent on an API older than the generation block. */
+  generation?: GenerationStatus;
 }
 
 export interface DocumentSummary {

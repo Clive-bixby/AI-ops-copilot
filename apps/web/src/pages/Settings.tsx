@@ -29,14 +29,16 @@ export function Settings() {
   const { data, loading, error, reload } = useApiData<SettingsData>(async () => {
     const [status, health] = await Promise.all([
       api.status().catch(() => null),
-      api.ai.health().catch((caught: unknown) => ({ error: errorMessage(caught) })),
+      // A 503 resolves with the payload, so the generation model and the reason
+      // it cannot answer are shown instead of a bare status code.
+      api.ai.health().catch((caught: unknown) => errorMessage(caught)),
     ]);
 
-    if (health && 'error' in health) {
-      return { status, health: null, healthError: String(health.error) };
+    if (typeof health === 'string') {
+      return { status, health: null, healthError: health };
     }
 
-    return { status, health: health as ApiHealth | null, healthError: null };
+    return { status, health, healthError: health?.generation?.error ?? null };
   }, []);
 
   const token = getToken();
@@ -221,6 +223,22 @@ export function Settings() {
                     {data?.health?.dimensions ? ` · ${data.health.dimensions}d` : ''}
                   </span>
                 </div>
+                <div className="flex items-center justify-between gap-2">
+                  <span className="font-body text-body-sm text-on-surface-variant">Generation</span>
+                  <span className="font-mono text-[11px] text-on-surface">
+                    {data?.health?.generation
+                      ? `${data.health.generation.provider}/${data.health.generation.model}`
+                      : 'not reported'}
+                  </span>
+                </div>
+                {data?.health?.generation?.fallback ? (
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="font-body text-body-sm text-on-surface-variant">Fallback</span>
+                    <span className="font-mono text-[11px] text-on-surface">
+                      {data.health.generation.fallback}
+                    </span>
+                  </div>
+                ) : null}
                 <div>
                   <div className="mb-1 flex items-center justify-between font-mono text-label-sm text-outline">
                     <span>Health probe</span>

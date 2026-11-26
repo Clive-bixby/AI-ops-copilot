@@ -95,7 +95,15 @@ export function decodeToken(token: string): DecodedToken | null {
   }
 }
 
-async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
+/**
+ * `acceptedStatuses` lets a caller read an error status that still carries a
+ * useful body -- `/ai/health` answers 503 with the full health payload.
+ */
+async function request<T>(
+  path: string,
+  options: RequestInit = {},
+  acceptedStatuses: readonly number[] = []
+): Promise<T> {
   const token = getToken();
   const orgId = getOrgId();
   const headers = new Headers(options.headers ?? {});
@@ -123,7 +131,7 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
     window.dispatchEvent(new Event('opspilot:unauthorized'));
   }
 
-  if (!response.ok) {
+  if (!response.ok && !acceptedStatuses.includes(response.status)) {
     let message = `Request failed (${response.status})`;
     try {
       const body = (await response.json()) as { error?: string; message?: string };
@@ -211,11 +219,17 @@ export const api = {
   },
 
   ai: {
+    /**
+     * 503 is read as data, not thrown: the API answers it with the same payload
+     * when generation is unconfigured or its model has been retired, and the
+     * cards need `generation` to say which model and why instead of showing
+     * "Request failed (503)". Network and timeout failures still reject.
+     */
     health: () => {
       const controller = new AbortController();
       const timer = window.setTimeout(() => controller.abort(), 8000);
-      return request<ApiHealth>('/ai/health', { signal: controller.signal }).finally(() =>
-        window.clearTimeout(timer)
+      return request<ApiHealth>('/ai/health', { signal: controller.signal }, [503]).finally(
+        () => window.clearTimeout(timer)
       );
     },
     search: (query: string, limit: number) =>

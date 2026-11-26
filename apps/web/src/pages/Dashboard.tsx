@@ -292,11 +292,36 @@ export function Dashboard() {
           value={data.health?.healthy ? 'Online' : 'Degraded'}
           icon="neurology"
           tone={data.health?.healthy ? 'ai' : 'default'}
-          hint={data.health?.healthy ? `${data.health.model} · model installed` : 'Embedding model unavailable'}
+          hint={
+            data.health?.healthy
+              ? `${data.health.model} · model installed`
+              : 'Embedding model unavailable'
+          }
           badge={
             <Badge tone={data.health?.healthy ? 'ai' : 'warn'}>
               {data.health?.healthy ? 'embeddings online' : 'model missing'}
             </Badge>
+          }
+        />
+        <Stat
+          label="Generation"
+          value={data.health?.generation?.error ? 'Offline' : data.health?.generation ? 'Ready' : 'Unknown'}
+          icon="bolt"
+          tone={data.health?.generation?.error ? 'critical' : 'default'}
+          hint={
+            data.health?.generation
+              ? `${data.health.generation.model} · ${
+                  data.health.generation.error ??
+                  `${data.health.generation.provider}${data.health.generation.fallback ? ` (fallback ${data.health.generation.fallback})` : ''}`
+                }`
+              : 'This API does not report a generation model'
+          }
+          badge={
+            data.health?.generation ? (
+              <Badge tone={data.health.generation.error ? 'warn' : 'neutral'}>
+                {data.health.generation.error ? 'analysis will fail' : 'analyses wired'}
+              </Badge>
+            ) : null
           }
         />
       </div>
