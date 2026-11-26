@@ -174,6 +174,32 @@ export async function getSessionContext(
   };
 }
 
+/**
+ * A real bcrypt hash of a random string that was discarded after hashing.
+ *
+ * An unknown email used to return before any bcrypt work, so the failed-login
+ * response arrived noticeably sooner than a wrong password and measured timing
+ * disclosed which accounts exist. Comparing against this hash keeps both paths
+ * doing one bcrypt comparison, and it authenticates nothing: no account has
+ * this password because nobody knows it.
+ */
+const DUMMY_PASSWORD_HASH =
+  "$2b$12$F2kzCPyIGnbuDQKX5Ek12uecPi/QqhsAdt9vd.lrOk.OMeceDoJIu";
+
+const INVALID_CREDENTIALS_MESSAGE = "Invalid email or password";
+
+/**
+ * A verified user with no membership cannot act anywhere. Answering with a
+ * token whose organization is null produced a session that failed every later
+ * request with 403, so the real problem surfaced far away from its cause.
+ *
+ * This is only reachable after the password matched, so naming the condition
+ * does not disclose whether an account exists to someone who does not already
+ * hold its credentials.
+ */
+const NO_MEMBERSHIP_MESSAGE =
+  "This account is not a member of any organization. Ask an administrator to add it.";
+
 export async function login(input: LoginInput): Promise<LoginResult> {
   const email = (input.email || "").trim().toLowerCase();
   const password = input.password || "";
@@ -191,31 +217,55 @@ export async function login(input: LoginInput): Promise<LoginResult> {
     throw new AuthConfigError("JWT_SECRET is not configured");
   }
 
-  const userResult = await pool.query<{ id: string; password_hash: string; organization_id: string; role: string }>(
-    `SELECT u.id, u.password_hash, m.organization_id, m.role
-     FROM users u
-     LEFT JOIN memberships m ON m.user_id = u.id
-     WHERE u.email = $1
-     LIMIT 1`,
+  const userResult = await pool.query<{ id: string; password_hash: string }>(
+    `SELECT id, password_hash FROM users WHERE email = $1 LIMIT 1`,
     [email]
   );
   const user = userResult.rows[0];
 
-  if (!user) {
-    throw new AuthUnauthorizedError("Invalid email or password");
+  // One comparison in both branches; see DUMMY_PASSWORD_HASH.
+  const isMatch = await bcrypt.compare(
+    password,
+    user?.password_hash ?? DUMMY_PASSWORD_HASH
+  );
+
+  if (!user || !isMatch) {
+    throw new AuthUnauthorizedError(INVALID_CREDENTIALS_MESSAGE);
   }
 
-  const isMatch = await bcrypt.compare(password, user.password_hash);
-  if (!isMatch) {
-    throw new AuthUnauthorizedError("Invalid email or password");
+  /*
+   * One organization per session, chosen the same way every time.
+   *
+   * The previous query used `LEFT JOIN memberships ... LIMIT 1` with no ORDER
+   * BY, so a user in two organizations was signed into an arbitrary one and a
+   * user in none still received a token. Oldest membership wins; the id is a
+   * total-order tie-break for memberships created in the same statement.
+   * Tokens carry no authority: orgMiddleware re-checks this membership on every
+   * request, so the choice here only decides which tenant opens by default.
+   */
+  const membershipResult = await pool.query<{
+    organization_id: string;
+    role: string;
+  }>(
+    `SELECT organization_id, role
+     FROM memberships
+     WHERE user_id = $1
+     ORDER BY created_at ASC, id ASC
+     LIMIT 1`,
+    [user.id]
+  );
+
+  const membership = membershipResult.rows[0];
+  if (!membership) {
+    throw new AuthConflictError(NO_MEMBERSHIP_MESSAGE);
   }
 
   const token = jwt.sign(
-    { 
+    {
       sub: user.id,
       userId: user.id,
-      organizationId: user.organization_id,
-      role: user.role
+      organizationId: membership.organization_id,
+      role: membership.role,
     },
     jwtSecret,
     {
