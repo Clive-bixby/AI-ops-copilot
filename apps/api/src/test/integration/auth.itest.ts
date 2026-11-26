@@ -162,7 +162,13 @@ describe("registration", () => {
     const duplicate = await register("duplicate@example.test", "Second Org");
 
     assert.equal(duplicate.status, 409);
-    assert.match(duplicate.body.error ?? "", /already exists/i);
+    // Generic on purpose: the sentence a caller sees must not confirm that the
+    // address already has an account. The precise reason is in the audit log.
+    assert.equal(
+      duplicate.body.error,
+      "Registration could not be completed with these details."
+    );
+    assert.doesNotMatch(duplicate.body.error ?? "", /already exists|email exists/i);
 
     const after = await getPool().query<{ count: string }>(
       "SELECT COUNT(*)::text AS count FROM organizations"

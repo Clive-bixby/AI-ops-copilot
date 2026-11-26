@@ -1,7 +1,10 @@
+import { createHash } from "node:crypto";
+
 import bcrypt from "bcrypt";
 import jwt from "jsonwebtoken";
 
 import { pool } from "../../core/db.js";
+import { logger } from "../../core/logger.js";
 
 export type RegisterInput = {
   email: string;
@@ -35,6 +38,23 @@ export class AuthValidationError extends Error {}
 export class AuthConflictError extends Error {}
 export class AuthConfigError extends Error {}
 export class AuthUnauthorizedError extends Error {}
+
+/**
+ * Audit lines identify a caller by a hash of the normalized email, never by the
+ * address itself: the same hash is comparable across events without publishing
+ * a customer's email into the log stream.
+ */
+function identityHash(email: string): string {
+  return createHash("sha256").update(email).digest("hex");
+}
+
+/**
+ * A conflict on registration must not confirm that the address already has an
+ * account. The generic sentence is returned for every 23505, and the precise
+ * reason goes to the audit log (hashed) where an operator can see it.
+ */
+const REGISTRATION_CONFLICT_MESSAGE =
+  "Registration could not be completed with these details.";
 
 export async function register(input: RegisterInput): Promise<RegisterResult> {
   const email = (input.email || "").trim().toLowerCase();
@@ -102,6 +122,12 @@ export async function register(input: RegisterInput): Promise<RegisterResult> {
 
     await client.query("COMMIT");
 
+    logger.info("auth.register_succeeded", {
+      userId: user.id,
+      organizationId: organization.id,
+      emailHash: identityHash(email),
+    });
+
     const token = jwt.sign(
       {
         sub: user.id,
@@ -130,7 +156,12 @@ export async function register(input: RegisterInput): Promise<RegisterResult> {
 
     const pgError = error as { code?: string };
     if (pgError.code === "23505") {
-      throw new AuthConflictError("Email already exists");
+      logger.info("auth.register_failed", {
+        emailHash: identityHash(email),
+        reason: "email_conflict",
+      });
+
+      throw new AuthConflictError(REGISTRATION_CONFLICT_MESSAGE);
     }
 
     throw error;
@@ -230,6 +261,11 @@ export async function login(input: LoginInput): Promise<LoginResult> {
   );
 
   if (!user || !isMatch) {
+    logger.info("auth.login_failed", {
+      emailHash: identityHash(email),
+      reason: "invalid_credentials",
+    });
+
     throw new AuthUnauthorizedError(INVALID_CREDENTIALS_MESSAGE);
   }
 
@@ -257,8 +293,22 @@ export async function login(input: LoginInput): Promise<LoginResult> {
 
   const membership = membershipResult.rows[0];
   if (!membership) {
+    // Reachable only after the password matched, so naming the condition here
+    // discloses nothing to a caller who does not already hold the credential.
+    logger.warn("auth.login_failed", {
+      userId: user.id,
+      emailHash: identityHash(email),
+      reason: "no_membership",
+    });
+
     throw new AuthConflictError(NO_MEMBERSHIP_MESSAGE);
   }
+
+  logger.info("auth.login_succeeded", {
+    userId: user.id,
+    organizationId: membership.organization_id,
+    emailHash: identityHash(email),
+  });
 
   const token = jwt.sign(
     {
