@@ -12,6 +12,7 @@ import {
 } from "./retrieval.service.js";
 import type { CitationSource, RetrievalMetrics } from "./retrieval.service.js";
 import { pool } from "../../core/db.js";
+import { logger } from "../../core/logger.js";
 import { defangUntrustedText } from "./promptSafety.js";
 import { elapsedMs, logAIMetrics, nowMs } from "./aiMetrics.util.js";
 
@@ -125,7 +126,8 @@ function getNumberEnv(name: string, defaultValue: number): number {
 
   const parsed = Number(rawValue);
   if (!Number.isFinite(parsed) || parsed <= 0) {
-    console.warn(`Invalid ${name}; using default`, {
+    logger.warn("ai.rag_invalid_number_env", {
+      name,
       value: rawValue,
       defaultValue,
     });
@@ -149,7 +151,7 @@ function getSimilarityEnv(name: string): number | undefined {
 
   const parsed = Number(rawValue);
   if (!Number.isFinite(parsed) || parsed < 0 || parsed > 1) {
-    console.warn(`Invalid ${name}; ignoring value`, { value: rawValue });
+    logger.warn("ai.rag_invalid_similarity_env", { name, value: rawValue });
     return undefined;
   }
 

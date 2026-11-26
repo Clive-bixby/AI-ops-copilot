@@ -1,5 +1,6 @@
 import "../../../config/env.js";
 
+import { logger } from "../../../core/logger.js";
 import { logAIMetrics, nowMs, elapsedMs } from "../aiMetrics.util.js";
 import { LlmConfigError, LlmProviderError, LlmTimeoutError } from "./errors.js";
 import { GeminiProvider } from "./gemini.provider.js";
@@ -110,7 +111,11 @@ function parsePositiveInt(
   const parsed = Number(raw);
 
   if (!Number.isInteger(parsed) || parsed < minimum) {
-    console.warn(`Invalid ${name}; using ${fallback}.`, { value: raw });
+    logger.warn("ai.llm_invalid_number_env", {
+      name,
+      value: raw,
+      fallback,
+    });
 
     return fallback;
   }

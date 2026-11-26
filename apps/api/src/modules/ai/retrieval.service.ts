@@ -1,3 +1,4 @@
+import { logger } from "../../core/logger.js";
 import { generateEmbedding } from "./embedding.service.js";
 import { searchFullText, searchSimilar } from "./vector.service.js";
 import type {
@@ -96,7 +97,8 @@ function getConfiguredMinSimilarity(): number {
 
   const threshold = Number(rawThreshold);
   if (!Number.isFinite(threshold) || threshold < 0 || threshold > 1) {
-    console.warn("Invalid AI_SEARCH_MIN_SIMILARITY; using default", {
+    logger.warn("ai.retrieval_invalid_similarity_env", {
+      name: "AI_SEARCH_MIN_SIMILARITY",
       value: rawThreshold,
       defaultValue: DEFAULT_MIN_SIMILARITY,
     });
