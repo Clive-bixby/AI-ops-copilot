@@ -2,6 +2,9 @@ import assert from "node:assert/strict";
 import { after, before, beforeEach, describe, it } from "node:test";
 
 import { createHash } from "node:crypto";
+import { readdirSync, unlinkSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 import {
   addMembership,
@@ -609,5 +612,174 @@ describe("AI endpoints and the retrieval data layer", () => {
       keywordHitsB.map((hit) => hit.id),
       [chunkB]
     );
+  });
+});
+
+/**
+ * The upload route is the only way a file enters OPA, and it had no HTTP test:
+ * the sniffing tests cover the predicate, not the route that applies it, the
+ * cleanup after a rejection, or which tenant ends up owning the row.
+ */
+const UPLOAD_DIR = path.resolve(
+  path.dirname(fileURLToPath(import.meta.url)),
+  "../../../uploads"
+);
+
+function uploadFilesPresent(): Set<string> {
+  try {
+    return new Set(readdirSync(UPLOAD_DIR));
+  } catch {
+    return new Set();
+  }
+}
+
+function removeFilesCreatedSince(before: Set<string>): void {
+  for (const name of uploadFilesPresent()) {
+    if (before.has(name)) continue;
+
+    try {
+      unlinkSync(path.join(UPLOAD_DIR, name));
+    } catch {
+      // A worker container may have removed it first; that is the outcome we want.
+    }
+  }
+}
+
+async function uploadFile(input: {
+  userId: string;
+  organizationId: string;
+  filename: string;
+  content: string;
+}): Promise<{ status: number; body: Record<string, unknown> }> {
+  const form = new FormData();
+  form.append(
+    "file",
+    new Blob([input.content], { type: "application/octet-stream" }),
+    input.filename
+  );
+
+  const response = await fetch(`${server.url}/documents/upload`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${tokenFor(input.userId)}`,
+      "x-organization-id": input.organizationId,
+    },
+    body: form,
+  });
+
+  const text = await response.text();
+  const body = text.length > 0 ? (JSON.parse(text) as Record<string, unknown>) : {};
+
+  return { status: response.status, body };
+}
+
+describe("document upload", () => {
+  it("rejects a renamed binary and leaves no file behind", async () => {
+    const before = uploadFilesPresent();
+
+    const response = await uploadFile({
+      userId: ownerA,
+      organizationId: orgA,
+      filename: "runbook.pdf",
+      content: "This is a markdown runbook wearing a PDF extension.",
+    });
+
+    assert.equal(response.status, 400, JSON.stringify(response.body));
+    assert.match(String(response.body.error), /does not start with a PDF header/);
+
+    assert.deepEqual(
+      [...uploadFilesPresent()].filter((name) => !before.has(name)),
+      [],
+      "the rejected upload must be deleted, not left in the uploads directory"
+    );
+
+    const stored = await getPool().query<{ total: number }>(
+      "SELECT COUNT(*)::int AS total FROM documents WHERE organization_id = $1",
+      [orgA]
+    );
+    assert.equal(stored.rows[0]!.total, 0, "a rejected file must not create a document");
+  });
+
+  it("stores an accepted file under the caller's organization only", async () => {
+    const before = uploadFilesPresent();
+
+    try {
+      const response = await uploadFile({
+        userId: ownerA,
+        organizationId: orgA,
+        filename: "a-rollback.md",
+        content: "Roll back a bad deploy by redeploying the previous image.\n",
+      });
+
+      // 202 when Redis is reachable, 503 when it is not: the document row is
+      // written before the queue is contacted in both cases.
+      assert.ok(
+        [202, 503].includes(response.status),
+        `unexpected ${response.status}: ${JSON.stringify(response.body)}`
+      );
+
+      const documentId = String(
+        response.status === 202 ? response.body.id : response.body.documentId
+      );
+      assert.match(documentId, /^[0-9a-f-]{36}$/);
+
+      const stored = await getPool().query<{ organization_id: string; filename: string }>(
+        "SELECT organization_id, filename FROM documents WHERE id = $1",
+        [documentId]
+      );
+      assert.equal(stored.rows[0]!.organization_id, orgA);
+      assert.equal(stored.rows[0]!.filename, "a-rollback.md");
+
+      const otherTenant = await apiRequest<DocumentListRow[]>(
+        server.url,
+        "GET",
+        "/documents",
+        auth(ownerB, orgB)
+      );
+      assert.deepEqual(otherTenant.body, []);
+    } finally {
+      removeFilesCreatedSince(before);
+    }
+  });
+});
+
+describe("admin member directory", () => {
+  it("refuses a member and shows an owner only their organization's members", async () => {
+    const memberA = await createUser("member@a.example.test");
+    await addMembership(memberA, orgA, "member");
+
+    const memberB = await createUser("member@b.example.test");
+    await addMembership(memberB, orgB, "member");
+
+    const denied = await apiRequest(server.url, "GET", "/admin/members", auth(memberA, orgA));
+    const directory = await apiRequest<MemberList>(
+      server.url,
+      "GET",
+      "/admin/members",
+      auth(ownerA, orgA)
+    );
+    // The same directory is readable by every member on /organization/members:
+    // the role gate belongs to the admin route, not to the data.
+    const openDirectory = await apiRequest<MemberList>(
+      server.url,
+      "GET",
+      "/organization/members",
+      auth(memberA, orgA)
+    );
+
+    assert.equal(denied.status, 403);
+    assert.equal(directory.status, 200);
+    assert.deepEqual(
+      directory.body.members.map((member) => member.email).sort(),
+      ["member@a.example.test", "owner@a.example.test"]
+    );
+    assert.equal(directory.body.total, 2);
+    assert.ok(
+      !directory.body.members.some((member) => member.email === "member@b.example.test"),
+      "another organization's member must not appear"
+    );
+
+    assert.equal(openDirectory.status, 200);
+    assert.equal(openDirectory.body.total, 2);
   });
 });

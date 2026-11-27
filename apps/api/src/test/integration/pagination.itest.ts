@@ -14,6 +14,7 @@ import {
   tokenFor,
 } from "./harness.js";
 import type { TestServer } from "./harness.js";
+import { MAX_INGEST_BATCH_ENTRIES } from "../../config/limits.js";
 
 /**
  * Bounded pagination on the three plain list endpoints.
@@ -207,5 +208,81 @@ describe("invalid pagination parameters", () => {
       (response.body as unknown as { error: string }).error,
       /limit must be an integer between 1 and 500/
     );
+  });
+});
+
+/**
+ * The batch cap is asserted at the parser level already; what these cases add is
+ * the route contract — that the parser's error becomes a 400 naming the cap, and
+ * that a rejected batch stores nothing at all.
+ */
+describe("ingest batch caps", () => {
+  it("accepts a log batch at the cap and refuses one entry more", async () => {
+    const atLimit = Array.from({ length: MAX_INGEST_BATCH_ENTRIES }, (_, index) => ({
+      level: "error",
+      message: `at-limit event ${index}`,
+    }));
+
+    const accepted = await apiRequest<{ count: number }>(
+      server.url,
+      "POST",
+      "/logs/ingest",
+      { ...auth(), body: { logs: atLimit } }
+    );
+
+    assert.equal(accepted.status, 201, JSON.stringify(accepted.body));
+    assert.equal(accepted.body.count, MAX_INGEST_BATCH_ENTRIES);
+
+    const over = await apiRequest<{ error: string }>(
+      server.url,
+      "POST",
+      "/logs/ingest",
+      {
+        ...auth(),
+        body: { logs: [...atLimit, { level: "error", message: "one too many" }] },
+      }
+    );
+
+    assert.equal(over.status, 400, JSON.stringify(over.body));
+    assert.match(
+      over.body.error,
+      new RegExp(`at most ${MAX_INGEST_BATCH_ENTRIES} log entries; received ${MAX_INGEST_BATCH_ENTRIES + 1}`)
+    );
+
+    const stored = await getPool().query<{ total: number }>(
+      "SELECT COUNT(*)::int AS total FROM logs WHERE organization_id = $1",
+      [orgA]
+    );
+    assert.equal(
+      stored.rows[0]!.total,
+      MAX_INGEST_BATCH_ENTRIES,
+      "the rejected batch must not have stored anything"
+    );
+  });
+
+  it("refuses a ticket batch above the cap without storing any of it", async () => {
+    const tickets = Array.from(
+      { length: MAX_INGEST_BATCH_ENTRIES + 1 },
+      (_, index) => ({ title: `ticket ${index}` })
+    );
+
+    const response = await apiRequest<{ error: string }>(
+      server.url,
+      "POST",
+      "/tickets/ingest",
+      { ...auth(), body: { tickets } }
+    );
+
+    assert.equal(response.status, 400, JSON.stringify(response.body));
+    assert.match(
+      response.body.error,
+      new RegExp(`at most ${MAX_INGEST_BATCH_ENTRIES} tickets; received ${MAX_INGEST_BATCH_ENTRIES + 1}`)
+    );
+
+    const stored = await getPool().query<{ total: number }>(
+      "SELECT COUNT(*)::int AS total FROM tickets WHERE organization_id = $1",
+      [orgA]
+    );
+    assert.equal(stored.rows[0]!.total, 0);
   });
 });
