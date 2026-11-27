@@ -31,6 +31,8 @@ import type { EvaluationQuery } from "../evaluation/retrievalDataset.js";
  * Candidate model: npm run eval:retrieval -- --provider gemini --model gemini-embedding-001
  * Held-out queries: npm run eval:retrieval -- --queries hard
  * Machine-readable: npm run eval:retrieval -- --json .eval/retrieval.json
+ * Quality gate: hybrid recall@10 must reach 0.95 on the standard set; `--floor`
+ * overrides it (0 disables, and the held-out set is ungated by default).
  *
  * `--provider` / `--model` seed and query one embedder into its own ephemeral
  * organization, named after that provider, so two runs cannot share vectors.
@@ -45,6 +47,13 @@ import type { EvaluationQuery } from "../evaluation/retrievalDataset.js";
 
 const TOP_K = 10;
 const RANK_CUTOFFS = [5, 10] as const;
+
+/**
+ * Hybrid recall@10 on the standard set was 0.9907 when measured in Phase 5.5.
+ * Losing every source of one query costs at most 0.028, so 0.95 catches a real
+ * regression without failing on a re-recorded fixture or a fusion-order tie.
+ */
+const HYBRID_RECALL_10_FLOOR = 0.95;
 const ORG_NAME = "Retrieval Evaluation (ephemeral)";
 
 type ModeMetrics = {
@@ -383,7 +392,7 @@ function fail(message: string): never {
   process.exit(1);
 }
 
-function parseArgs(argv: string[]): Options {
+function parseArgs(argv: string[]): Options & { floor: number } {
   const options: Options = {
     keep: false,
     small: false,
@@ -392,6 +401,7 @@ function parseArgs(argv: string[]): Options {
     model: null,
     json: null,
   };
+  let floorOverride: number | null = null;
 
   for (let index = 0; index < argv.length; index += 1) {
     const flag = argv[index]!;
@@ -426,14 +436,30 @@ function parseArgs(argv: string[]): Options {
         options.json = value();
         index += 1;
         break;
+      case "--floor": {
+        const raw = value();
+        index += 1;
+        const parsed = Number(raw);
+        if (!Number.isFinite(parsed) || parsed < 0 || parsed > 1) {
+          fail(`--floor must be a number between 0 and 1 (received "${raw}").`);
+        }
+        floorOverride = parsed;
+        break;
+      }
       default:
         fail(
-          `Unknown flag "${flag}". Use --keep, --small, --queries standard|hard, --provider, --model, --json.`
+          `Unknown flag "${flag}". Use --keep, --small, --queries standard|hard, --provider, --model, --json, --floor.`
         );
     }
   }
 
-  return options;
+  // The measured floor belongs to the standard set. The held-out set sits at
+  // 0.90 by design, so gating it at the standard floor would fail every run;
+  // a comparative hard-set run opts in with an explicit --floor.
+  const floor =
+    floorOverride ?? (options.queries === "standard" ? HYBRID_RECALL_10_FLOOR : 0);
+
+  return { ...options, floor };
 }
 
 /**
@@ -618,6 +644,22 @@ async function main(): Promise<void> {
           `${vectorReport.rankedKeys[0] ?? "-"} | ${hybridReport.rankedKeys[0] ?? "-"} |`
       );
     });
+
+    const hybridRecall10 = summary.hybrid.recall[10] ?? 0;
+
+    console.log("");
+    if (options.floor === 0) {
+      console.log("Quality gate: disabled.");
+    } else if (hybridRecall10 >= options.floor) {
+      console.log(
+        `Quality gate: hybrid recall@10 ${format(hybridRecall10)} meets the ${format(options.floor)} floor.`
+      );
+    } else {
+      process.exitCode = 1;
+      console.error(
+        `Quality gate failed: hybrid recall@10 ${format(hybridRecall10)} is below the ${format(options.floor)} floor.`
+      );
+    }
 
     const payload = {
       generatedAt: new Date().toISOString(),

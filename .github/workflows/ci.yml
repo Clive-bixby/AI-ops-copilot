@@ -67,10 +67,9 @@ jobs:
       contents: read
       pull-requests: write
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       # `npm audit` gates the trees as they are on the branch; this gates what a
       # pull request adds, before it lands. Moderate is the same threshold as the
-      # audit job.
+      # audit job. The action reads the diff from the API, so no checkout.
       - uses: actions/dependency-review-action@2031cfc080254a8a887f58cffee85186f0e49e48 # v4.9.0
         with:
           fail-on-severity: moderate
@@ -221,8 +220,8 @@ jobs:
           exit 1
       # Seeds the labelled corpus through the production ingestion path and
       # measures the vector and hybrid arms, so a broken chunking, indexing or
-      # fusion query fails here. The metrics are reported, not threshold-gated:
-      # a change in retrieval quality is a review decision, not a build failure.
+      # fusion query fails here. The harness also gates hybrid recall@10 at the
+      # measured 0.95 floor, so a quality regression fails the job too.
       - run: npm run eval:retrieval
       - name: Stop embedding fixture stub
         if: always()
