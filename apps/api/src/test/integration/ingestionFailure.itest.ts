@@ -6,8 +6,6 @@ import os from "node:os";
 import path from "node:path";
 import { after, before, beforeEach, describe, it } from "node:test";
 
-import { resetEmbeddingProvider } from "../../modules/ai/embedding/index.js";
-import { runIngestionJob } from "../../modules/ingestion/jobRunner.js";
 import {
   createOrganization,
   getPool,
@@ -15,6 +13,16 @@ import {
   resetDatabase,
   setupTestDatabase,
 } from "./harness.js";
+
+/**
+ * Loaded in `before()`, never at import time: both import `core/db`, which
+ * builds the pool from the environment as it is *then*. A static import here
+ * evaluated `core/db` before the harness applied `TEST_DATABASE_URL`, so this
+ * suite ran against whatever `.env` named -- a deployed database in this
+ * checkout. Types are erased, so the annotations cost nothing.
+ */
+let runIngestionJob: typeof import("../../modules/ingestion/jobRunner.js")["runIngestionJob"];
+let resetEmbeddingProvider: typeof import("../../modules/ai/embedding/index.js")["resetEmbeddingProvider"];
 
 /**
  * Ingestion failure modes, driven through the real job runner against real
@@ -184,6 +192,9 @@ async function chunkCount(documentId: string): Promise<number> {
 before(async () => {
   await setupTestDatabase();
 
+  ({ runIngestionJob } = await import("../../modules/ingestion/jobRunner.js"));
+  ({ resetEmbeddingProvider } = await import("../../modules/ai/embedding/index.js"));
+
   directory = await fs.mkdtemp(path.join(os.tmpdir(), "opspilot-ingest-"));
   provider = await startEmbeddingStub();
 
@@ -197,7 +208,12 @@ before(async () => {
 
 after(async () => {
   provider?.close();
-  await fs.rm(directory, { recursive: true, force: true });
+
+  // `before()` may have failed before the directory existed; a TypeError from
+  // this hook used to bury the real setup error.
+  if (directory) {
+    await fs.rm(directory, { recursive: true, force: true });
+  }
 
   for (const name of [
     "EMBEDDING_PROVIDER",
@@ -209,7 +225,7 @@ after(async () => {
     delete process.env[name];
   }
 
-  resetEmbeddingProvider();
+  resetEmbeddingProvider?.();
 
   if (hasPool()) {
     await getPool().end();

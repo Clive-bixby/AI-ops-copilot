@@ -26,6 +26,26 @@ const loaded = dotenv.config({
 /** False when no env file was found (a container normally has real env vars). */
 export const envFileLoaded = !("error" in loaded);
 
+/**
+ * A test process must never be able to reach the database named in `.env`.
+ *
+ * Every integration suite truncates tables, and `.env` in this repository
+ * points at a deployed database. Setting `TEST_DATABASE_URL` used to be enough
+ * only if the harness happened to be imported before any module that builds a
+ * pool; one static `import { runIngestionJob }` evaluated `core/db.ts` first and
+ * the suite truncated the deployed database instead of the disposable one.
+ *
+ * This file is the only place that loads `.env` and every module that reads the
+ * environment at import time imports it, so the override belongs here: it does
+ * not depend on import order. Production is untouched (no `TEST_DATABASE_URL`),
+ * and `NODE_ENV=production` is refused outright.
+ */
+const testDatabaseUrl = process.env.TEST_DATABASE_URL?.trim();
+
+if (testDatabaseUrl && process.env.NODE_ENV !== "production") {
+  process.env.DATABASE_URL = testDatabaseUrl;
+}
+
 /** Integer from the environment, with the fallback used for missing/invalid. */
 export function envInt(name: string, fallback: number): number {
   const raw = process.env[name];

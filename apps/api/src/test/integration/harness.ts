@@ -64,6 +64,22 @@ export async function setupTestDatabase(): Promise<void> {
 
     const { pool } = await import("../../core/db.js");
     poolRef = pool;
+
+    // A suite that imported a database module before this function ran would
+    // have built the pool from `.env` instead. `config/env.ts` now forces the
+    // test URL in, so this can only fire if that guard is removed -- which is
+    // exactly when everyone needs to be told instead of truncating a real
+    // database.
+    const connectedTo = pool.options.connectionString;
+
+    if (connectedTo !== url) {
+      throw new Error(
+        "The database pool was created for a different connection string than " +
+          "TEST_DATABASE_URL. Import database-touching modules dynamically inside " +
+          "before(), after setupTestDatabase()."
+      );
+    }
+
     await pool.query("SELECT 1");
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
